@@ -12,6 +12,7 @@ from ray.streaming.config import Config
 from ray.streaming.jobworker import JobWorker
 from ray.streaming.operator import Operator, OpType
 from ray.streaming.operator import PScheme, PStrategy
+from ray.streaming.operator import OperatorChain
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -57,11 +58,12 @@ class ExecutionGraph:
         self.task_ids = {}
         self.input_channels = {}  # operator id -> input channels
         self.output_channels = {}  # operator id -> output channels
+        self.chained_operators = []
 
     # Constructs and deploys a Ray actor of a specific type
     # TODO (john): Actor placement information should be specified in
     # the environment's configuration
-    def __generate_actor(self, instance_index, operator, input_channels,
+    def __generate_actor(self, instance_index, operator_chain, input_channels,
                          output_channels):
         """Generates an actor that will execute a particular instance of
         the logical operator
@@ -72,17 +74,17 @@ class ExecutionGraph:
             input_channels: The input channels of the instance.
             output_channels The output channels of the instance.
         """
-        worker_id = (operator.id, instance_index)
+        worker_id = (operator_chain.id, instance_index)
         # Record the physical dataflow graph (for debugging purposes)
         self.__add_channel(worker_id, output_channels)
         # Note direct_call only support pass by value
         return JobWorker._remote(
-            args=[worker_id, operator, input_channels, output_channels],
+            args=[worker_id, operator_chain, input_channels, output_channels],
             is_direct_call=True)
 
     # Constructs and deploys a Ray actor for each instance of
     # the given operator
-    def __generate_actors(self, operator, upstream_channels,
+    def __generate_actors(self, operator_chain, upstream_channels,
                           downstream_channels):
         """Generates one actor for each instance of the given logical
         operator.
@@ -94,9 +96,9 @@ class ExecutionGraph:
             downstream_channels (list): A list of all downstream channels
             for all instances of the operator.
         """
-        num_instances = operator.num_instances
+        num_instances = operator_chain.num_instances
         logger.info("Generating {} actors of type {}...".format(
-            num_instances, operator.type))
+            num_instances, operator_chain.type))
         handles = []
         for i in range(num_instances):
             # Collect input and output channels for the particular instance
@@ -104,11 +106,11 @@ class ExecutionGraph:
             op = [c for c in downstream_channels if c.src_instance_index == i]
             log = "Constructed {} input and {} output channels "
             log += "for the {}-th instance of the {} operator."
-            logger.debug(log.format(len(ip), len(op), i, operator.type))
-            handle = self.__generate_actor(i, operator, ip, op)
+            logger.debug(log.format(len(ip), len(op), i, operator_chain.type))
+            handle = self.__generate_actor(i, operator_chain, ip, op)
             if handle:
                 handles.append(handle)
-                self.actors_map[(operator.id, i)] = handle
+                self.actors_map[(operator_chain.id, i)] = handle
         return handles
 
     # Adds a channel/edge to the physical dataflow graph
@@ -119,7 +121,7 @@ class ExecutionGraph:
 
     # Generates all required data channels between an operator
     # and its downstream operators
-    def _generate_channels(self, operator):
+    def _generate_channels(self, operator_chain):
         """Generates all output data channels
         (see: DataChannel in communication.py) for all instances of
         the given logical operator.
@@ -133,23 +135,23 @@ class ExecutionGraph:
         strategy specified by the user.
         """
         channels = {}  # destination operator id -> channels
-        strategies = operator.partitioning_strategies
+        strategies = operator_chain.partitioning_strategies
         for dst_operator, p_scheme in strategies.items():
             num_dest_instances = self.env.operators[dst_operator].num_instances
             entry = channels.setdefault(dst_operator, [])
             if p_scheme.strategy == PStrategy.Forward:
-                for i in range(operator.num_instances):
+                for i in range(operator_chain.num_instances):
                     # ID of destination instance to connect
                     id = i % num_dest_instances
-                    qid = self._gen_str_qid(operator.id, i, dst_operator, id)
-                    c = DataChannel(operator.id, i, dst_operator, id, qid)
+                    qid = self._gen_str_qid(operator_chain.id, i, dst_operator, id)
+                    c = DataChannel(operator_chain.id, i, dst_operator, id, qid)
                     entry.append(c)
             elif p_scheme.strategy in all_to_all_strategies:
-                for i in range(operator.num_instances):
+                for i in range(operator_chain.num_instances):
                     for j in range(num_dest_instances):
-                        qid = self._gen_str_qid(operator.id, i, dst_operator,
+                        qid = self._gen_str_qid(operator_chain.id, i, dst_operator,
                                                 j)
-                        c = DataChannel(operator.id, i, dst_operator, j, qid)
+                        c = DataChannel(operator_chain.id, i, dst_operator, j, qid)
                         entry.append(c)
             else:
                 # TODO (john): Add support for other partitioning strategies
@@ -196,6 +198,7 @@ class ExecutionGraph:
                 self.env.operators[dst_operator_id].name, dst_instance_index))
 
     def build_graph(self):
+        self.build_chaining()
         self.build_channels()
 
         # to support cyclic reference serialization
@@ -211,29 +214,63 @@ class ExecutionGraph:
         # Each operator instance is implemented as a Ray actor
         # Actors are deployed in topological order, as we traverse the
         # logical dataflow from sources to sinks.
-        for node in nx.topological_sort(self.env.logical_topo):
-            operator = self.env.operators[node]
-            # Instantiate Ray actors
+        #for node in nx.topological_sort(self.env.logical_topo):
+        #    operator = self.env.operators[node]
+        #    # Instantiate Ray actors
+        #    handles = self.__generate_actors(
+        #        operator, self.input_channels.get(node, []),
+        #        self.output_channels.get(node, []))
+        #    if handles:
+        #        self.actor_handles.extend(handles)
+        for operator_chain in self.chained_operators:
             handles = self.__generate_actors(
-                operator, self.input_channels.get(node, []),
-                self.output_channels.get(node, []))
+                operator_chain, self.input_channels.get(operator_chain.id, []),
+                self.output_channels.get(operator_chain.id, []))
             if handles:
                 self.actor_handles.extend(handles)
+
+    def build_chaining(self):
+        operator_list = []
+        #todo warning: all chained operators have the same num_instance
+        for node in nx.topological_sort(self.env.logical_topo):
+            op_type = self.env.operators[node].type
+            if op_type == OpType.KeyBy or op_type == OpType.ReadTextFile:
+                operator_list.append(self.env.operators[node])
+                operator_chain = OperatorChain(operator_list)
+                self.chained_operators.append(operator_chain)
+                operator_list = []
+            else:
+                operator_list.append(self.env.operators[node])
+
+        if len(operator_list) > 0:
+            operator_chain = OperatorChain(operator_list)
+            self.chained_operators.append(operator_chain)
+
 
     def build_channels(self):
         self.build_time = int(time.time() * 1000)
         # gen auto-incremented unique task id for every operator instance
-        for node in nx.topological_sort(self.env.logical_topo):
-            operator = self.env.operators[node]
-            for i in range(operator.num_instances):
-                operator_instance_id = (operator.id, i)
+        #for node in nx.topological_sort(self.env.logical_topo):
+        #    operator = self.env.operators[node]
+        #    for i in range(operator.num_instances):
+        #        operator_instance_id = (operator.id, i)
+        #        self.task_ids[operator_instance_id] = self._gen_task_id()
+
+        for operator_chain in self.chained_operators:
+            for i in range(operator_chain.num_instances):
+                operator_instance_id = (operator_chain.id, i)
                 self.task_ids[operator_instance_id] = self._gen_task_id()
+
         channels = {}
-        for node in nx.topological_sort(self.env.logical_topo):
-            operator = self.env.operators[node]
+        #for node in nx.topological_sort(self.env.logical_topo):
+        #    operator = self.env.operators[node]
+        #    # Generate downstream data channels
+        #    downstream_channels = self._generate_channels(operator)
+        #    channels[node] = downstream_channels
+        for operator_chain in self.chained_operators:
             # Generate downstream data channels
-            downstream_channels = self._generate_channels(operator)
-            channels[node] = downstream_channels
+            downstream_channels = self._generate_channels(operator_chain)
+            channels[operator_chain.id] = downstream_channels
         # op_id -> channels
         input_channels = {}
         output_channels = {}

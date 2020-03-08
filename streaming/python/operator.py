@@ -107,3 +107,44 @@ class Operator:
     @property
     def logic(self):
         return cloudpickle.loads(self._logic)
+
+class OperatorChain:
+    def __init__(self, operator_list):
+        self.operator_list = operator_list
+        self.head_processor = None
+        # todo: set num_instances to that of the last operator
+        self.id = operator_list[0].id
+        self.num_instances = operator_list[-1].num_instances
+        self.partitioning_strategies = operator_list[-1].partitioning_strategies
+
+        self.type = "{"
+        for operator in operator_list:
+            self.type += " " + operator.name
+        self.type += "}"
+
+    def init(self, input_gate, output_gate):
+        next_processor = None
+        # reversely initialize each processor
+        if len(self.operator_list) == 1:
+            operator = self.operator_list.pop()
+            self.head_processor = operator.processor_class(operator)
+            self.head_processor.set_chaining(None, input_gate, output_gate)
+            return
+
+        while True:
+            operator = self.operator_list.pop()
+            processor = operator.processor_class(operator)
+            if len(self.operator_list) == 0:
+                processor.set_chaining(next_processor, input_gate, None)
+                break
+            elif next_processor is None:
+                processor.set_chaining(None, None, output_gate)
+            else:
+                processor.set_chaining(next_processor, None, None)
+            next_processor = processor
+        self.head_processor = processor
+
+    def run(self):
+        while True:
+            if self.head_processor.process(None) is False:
+                return

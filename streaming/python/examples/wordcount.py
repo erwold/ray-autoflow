@@ -4,7 +4,8 @@ import time
 
 import ray
 import wikipedia
-from ray.streaming.streaming import Environment
+from ray.streaming.config import Config
+from ray.streaming.streaming import Environment, Conf
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -79,21 +80,21 @@ if __name__ == "__main__":
     args = parser.parse_args()
     titles_file = str(args.titles_file)
 
-    ray.init()
+    ray.init(local_mode=False)
 
     # A Ray streaming environment with the default configuration
-    env = Environment()
+    env = Environment(config=Conf(channel_type=Config.NATIVE_CHANNEL))
     env.set_parallelism(2)  # Each operator will be executed by two actors
 
     # The following dataflow is a simple streaming wordcount
     #  with a rolling sum operator.
     # It reads articles from wikipedia, splits them in words,
     # shuffles words, and counts the occurences of each word.
-    stream = env.source(Wikipedia(titles_file)) \
-                .round_robin() \
+    stream = env.read_text_file(titles_file) \
+                .shuffle() \
                 .flat_map(splitter) \
-                .key_by(key_selector) \
-                .sum(attribute_selector) \
+                .key_by(0) \
+                .sum(1) \
                 .inspect(print)     # Prints the contents of the
     # stream to stdout
     start = time.time()

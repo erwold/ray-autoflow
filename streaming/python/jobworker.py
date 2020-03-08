@@ -24,14 +24,14 @@ class JobWorker:
         the operator instance.
     """
 
-    def __init__(self, worker_id, operator, input_channels, output_channels):
+    def __init__(self, worker_id, operator_chain, input_channels, output_channels):
         self.env = None
         self.worker_id = worker_id
-        self.operator = operator
-        processor_name = operator.processor_class.__name__
-        processor_instance = operator.processor_class(operator)
-        self.processor_name = processor_name
-        self.processor_instance = processor_instance
+        self.operator_chain = operator_chain
+        #processor_name = operator.processor_class.__name__
+        #processor_instance = operator.processor_class(operator)
+        self.processor_name = operator_chain.type
+        #self.processor_instance = processor_instance
         self.input_channels = input_channels
         self.output_channels = output_channels
         self.input_gate = None
@@ -69,7 +69,7 @@ class JobWorker:
         if len(self.output_channels) > 0:
             self.output_gate = DataOutput(
                 env, self.output_channels,
-                self.operator.partitioning_strategies)
+                self.operator_chain.partitioning_strategies)
             self.output_gate.init()
         logger.info("init operator instance %s succeed", self.processor_name)
         return True
@@ -83,8 +83,9 @@ class JobWorker:
                     self.processor_name, actor_id)
 
     def run(self):
+        self.operator_chain.init(self.input_gate, self.output_gate)
         logger.info("%s start running", self.processor_name)
-        self.processor_instance.run(self.input_gate, self.output_gate)
+        self.operator_chain.run()
         logger.info("%s finished running", self.processor_name)
         self.close()
 

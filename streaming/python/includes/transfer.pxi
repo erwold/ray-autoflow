@@ -288,6 +288,7 @@ cdef class DataReader:
                 msg_nums,
                 msg_list)
             timestamp = bundle.get().meta.get().GetMessageBundleTs()
+            queue_id = bundle.get().c_from
             for msg in msg_list:
                 msg_bytes = msg.get().RawData()[:msg.get().GetDataSize()]
                 qid_bytes = queue_id.Binary()

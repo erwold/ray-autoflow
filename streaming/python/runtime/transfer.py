@@ -183,6 +183,7 @@ class DataWriter:
             msg_id
         """
         assert type(item) == bytes
+        logger.info("write qid {}".format(channel_id.object_qid))
         msg_id = self.writer.write(channel_id.object_qid, item)
         return msg_id
 
@@ -241,6 +242,7 @@ class DataReader:
             msgs = self.reader.read(timeout_millis)
             for msg in msgs:
                 msg_bytes, msg_id, timestamp, qid_bytes = msg
+                logger.info("received qid {}".format(channel_bytes_to_str(qid_bytes)))
                 data_msg = DataMessage(msg_bytes, timestamp,
                                        channel_bytes_to_str(qid_bytes), msg_id)
                 self.__queue.put(data_msg)
