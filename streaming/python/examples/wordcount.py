@@ -74,6 +74,8 @@ def key_selector(tuple):
 def attribute_selector(tuple):
     return tuple[1]
 
+def lpq(record):
+    pass
 
 if __name__ == "__main__":
     # Get program parameters
@@ -95,7 +97,7 @@ if __name__ == "__main__":
                 .flat_map(splitter) \
                 .key_by(0) \
                 .sum(1) \
-                .inspect(print)     # Prints the contents of the
+                .inspect(lpq)     # Prints the contents of the
     # stream to stdout
     start = time.time()
     env_handle = env.execute()  # Deploys and executes the dataflow

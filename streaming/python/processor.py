@@ -34,7 +34,7 @@ class ReadTextFile:
             if not record:
                 self.reader.close()
                 return
-            logger.info("source push {}".format(record[:-1]))
+            #logger.info("source push {}".format(record[:-1]))
             output_gate.push(
                 record[:-1])  # Push after removing newline characters
 
@@ -47,7 +47,7 @@ class ReadTextFile:
         if not record:
             self.reader.close()
             return False
-        logger.info("source push {}".format(record[:-1]))
+        #logger.info("source push {}".format(record[:-1]))
         if self.downstream_operator:
             self.downstream_operator.process(record[:-1])
         elif self.output_gate:
@@ -138,10 +138,10 @@ class FlatMap:
             record = self.input_gate.pull()
             if record is None:
                 return False
-        logger.info("flatmap {}".format(record))
+        #logger.info("flatmap {}".format(record))
         records = self.flatmap_fn(record)
 
-        logger.info("after flatmap {}".format(records))
+        #logger.info("after flatmap {}".format(records))
         for record in records:
             if self.downstream_operator:
                 self.downstream_operator.process(record)
@@ -294,10 +294,12 @@ class Reduce:
     def process(self, record):
         if record is None:
             record = self.input_gate.pull()
+            #logger.info("reduce {}".format(record))
             if record is None:
                 return False
 
         key, rest = record
+        #logger.info("reduce {}".format(record))
         new_value = self._attribute_selector(rest)
         try:
             old_value = self.state[key]
@@ -356,9 +358,9 @@ class KeyBy:
             record = self.input_gate.pull()
             if record is None:
                 return False
-        logger.info("keyby record {}".format(record))
+        #logger.info("keyby record {}".format(record))
         key = self._key_selector(record)
-        logger.info("after keyby record {}".format((key, record)))
+        #logger.info("after keyby record {}".format((key, record)))
 
         if self.downstream_operator:
             self.downstream_operator.process((key, record))

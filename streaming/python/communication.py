@@ -108,6 +108,7 @@ class DataInput:
         msg_data = item.body()
         if msg_data == _CLOSE_FLAG:
             self.closed[item.channel_id] = True
+            logger.debug("[reader] recv close channel {}")
             if len(self.closed) == len(self.input_channels):
                 return None
             else:
@@ -226,6 +227,7 @@ class DataOutput:
         """
         for c in self.channels:
             self.writer.write(c.qid, _CLOSE_FLAG)
+        logger.debug("[writer] close channel {}")
         # must ensure DataWriter send None flag to peer actor
         self.writer.stop()
 

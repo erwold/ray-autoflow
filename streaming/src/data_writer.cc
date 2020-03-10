@@ -460,6 +460,21 @@ void DataWriter::FlowControlTimer() {
         return;
       }
       ProducerChannelInfo &channel_info = channel_info_map_[output_queue];
+
+      //record some statistics
+      //current_seq_id - last_current_seq_id : how many records have been send
+      //consumed_seq_id - last_consumed_seq_id : how many records have been processed
+      //by the downstream operator
+      channel_info.sent_message_cnt = channel_info.current_message_id - 
+                                        channel_info.last_current_message_id;
+      channel_info.processed_msg_cnt = channel_info.queue_info.consumed_seq_id - 
+                                        channel_info.last_consumed_seq_id;
+      channel_info.last_current_message_id = channel_info.current_message_id;
+      channel_info.last_consumed_seq_id = channel_info.queue_info.consumed_seq_id;
+      STREAMING_LOG(DEBUG) << "[LPQ] num records sent: " << channel_info.sent_message_cnt
+                           << " num records processed: " << channel_info.processed_msg_cnt;
+
+
       if (!channel_info.flow_control) {
         continue;
       }

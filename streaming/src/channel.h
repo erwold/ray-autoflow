@@ -30,6 +30,12 @@ struct ProducerChannelInfo {
   int64_t message_pass_by_ts;
   ActorID actor_id;
 
+  //record some statistics for dynamic message pushing
+  uint64_t last_current_message_id = 0;
+  uint64_t last_consumed_seq_id = 0;
+  uint64_t sent_message_cnt = 0;
+  uint64_t processed_msg_cnt = 0;
+
   /// The following parameters are used for event driven to record different
   /// input events.
   uint64_t sent_empty_cnt = 0;

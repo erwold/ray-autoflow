@@ -183,7 +183,7 @@ class DataWriter:
             msg_id
         """
         assert type(item) == bytes
-        logger.info("write qid {}".format(channel_id.object_qid))
+        #logger.info("write qid {}".format(channel_id.object_qid))
         msg_id = self.writer.write(channel_id.object_qid, item)
         return msg_id
 
@@ -242,7 +242,7 @@ class DataReader:
             msgs = self.reader.read(timeout_millis)
             for msg in msgs:
                 msg_bytes, msg_id, timestamp, qid_bytes = msg
-                logger.info("received qid {}".format(channel_bytes_to_str(qid_bytes)))
+                #logger.info("received qid {}".format(channel_bytes_to_str(qid_bytes)))
                 data_msg = DataMessage(msg_bytes, timestamp,
                                        channel_bytes_to_str(qid_bytes), msg_id)
                 self.__queue.put(data_msg)
@@ -278,6 +278,14 @@ def _to_native_conf(conf):
     if Config.STREAMING_EMPTY_MESSAGE_INTERVAL in conf:
         config.empty_message_interval = \
             conf[Config.STREAMING_EMPTY_MESSAGE_INTERVAL]
+    if Config.FLOW_CONTROL_TYPE in conf:
+        conf.flow_control_type = conf[Config.FLOW_CONTROL_TYPE]
+    if Config.WRITER_CONSUMED_STEP in conf:
+        conf.writer_consumed_step = \
+            conf[Config.WRITER_CONSUMED_STEP]
+    if Config.READER_CONSUMED_STEP in conf:
+        conf.reader_consumed_step = \
+            conf[Config.READER_CONSUMED_STEP]
     logger.info("conf: %s", str(config))
     return config.SerializeToString()
 
