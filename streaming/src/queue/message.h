@@ -63,7 +63,7 @@ class DataMessage : public Message {
  public:
   DataMessage(const ActorID &actor_id, const ActorID &peer_actor_id, ObjectID queue_id,
               uint64_t seq_id, std::shared_ptr<LocalMemoryBuffer> buffer, bool raw)
-      : Message(actor_id, peer_actor_id, queue_id, buffer), seq_id_(seq_id), raw_(raw) {}
+      : Message(actor_id, peer_actor_id, queue_id, buffer), seq_id_(seq_id), raw_(raw), queue_id_(queue_id) {}
   virtual ~DataMessage() {}
 
   static std::shared_ptr<DataMessage> FromBytes(uint8_t *bytes);
@@ -71,10 +71,12 @@ class DataMessage : public Message {
   uint64_t SeqId() { return seq_id_; }
   bool IsRaw() { return raw_; }
   queue::protobuf::StreamingQueueMessageType Type() { return type_; }
+  ObjectID QueueId() { return queue_id_; }
 
  private:
   uint64_t seq_id_;
   bool raw_;
+  ObjectID queue_id_;
 
   const queue::protobuf::StreamingQueueMessageType type_ =
       queue::protobuf::StreamingQueueMessageType::StreamingQueueDataMsgType;
@@ -87,7 +89,7 @@ class NotificationMessage : public Message {
  public:
   NotificationMessage(const ActorID &actor_id, const ActorID &peer_actor_id,
                       const ObjectID &queue_id, uint64_t seq_id)
-      : Message(actor_id, peer_actor_id, queue_id), seq_id_(seq_id) {}
+      : Message(actor_id, peer_actor_id, queue_id), seq_id_(seq_id), queue_id_(queue_id) {}
 
   virtual ~NotificationMessage() {}
 
@@ -95,10 +97,13 @@ class NotificationMessage : public Message {
   virtual void ToProtobuf(std::string *output);
 
   uint64_t SeqId() { return seq_id_; }
+  ObjectID QueueId() { return queue_id_; }
+
   queue::protobuf::StreamingQueueMessageType Type() { return type_; }
 
  private:
   uint64_t seq_id_;
+  ObjectID queue_id_;
   const queue::protobuf::StreamingQueueMessageType type_ =
       queue::protobuf::StreamingQueueMessageType::StreamingQueueNotificationMsgType;
 };

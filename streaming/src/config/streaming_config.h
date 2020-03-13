@@ -35,7 +35,8 @@ class StreamingConfig {
   // Default flow control type is unconsumed sequence flow control. More detail
   // introducation and implemention in ray/streaming/src/flow_control.h.
   streaming::proto::FlowControlType flow_control_type_ =
-      streaming::proto::FlowControlType::UnconsumedSeqFlowControl;
+      //streaming::proto::FlowControlType::UnconsumedSeqFlowControl;
+      streaming::proto::FlowControlType::NoFlowControl;
 
   // Default writer and reader consumed step.
   uint32_t writer_consumed_step_ = 1000;

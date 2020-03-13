@@ -61,6 +61,12 @@ void DataReader::Init(const std::vector<ObjectID> &input_ids,
   InitChannel();
 }
 
+void DataReader::RemoveChannel(ObjectID q_id) {
+    input_queue_ids_.erase(std::remove(input_queue_ids_.begin(),
+                    input_queue_ids_.end(), q_id), input_queue_ids_.end());
+    STREAMING_LOG(DEBUG) << "[LPQ] Remove Channel " << q_id;
+}
+
 StreamingStatus DataReader::InitChannel() {
   STREAMING_LOG(INFO) << "[Reader] Getting queues. total queue num "
                       << input_queue_ids_.size() << ", unready queue num => "
@@ -158,12 +164,43 @@ StreamingStatus DataReader::StashNextMessage(std::shared_ptr<DataBundle> &messag
   return StreamingStatus::OK;
 }
 
+StreamingStatus DataReader::StashMessage(ObjectID q_id) {
+
+  std::shared_ptr<DataBundle> new_msg = std::make_shared<DataBundle>();
+  auto &channel_info = channel_info_map_[q_id];
+  //reader_merger_->pop();
+  int64_t cur_time = current_time_ms();
+  RETURN_IF_NOT_OK(GetMessageFromChannel(channel_info, new_msg))
+  reader_merger_->pop();
+  reader_merger_->push(new_msg);
+  //channel_info.last_queue_item_delay =
+  //    new_msg->meta->GetMessageBundleTs() - message->meta->GetMessageBundleTs();
+  channel_info.last_queue_item_latency = current_time_ms() - cur_time;
+  return StreamingStatus::OK;
+
+}
+
 StreamingStatus DataReader::GetMergedMessageBundle(std::shared_ptr<DataBundle> &message,
                                                    bool &is_valid_break) {
   int64_t cur_time = current_time_ms();
-  if (last_fetched_queue_item_) {
-    RETURN_IF_NOT_OK(StashNextMessage(last_fetched_queue_item_))
+  //if (last_fetched_queue_item_) {
+  //  RETURN_IF_NOT_OK(StashNextMessage(last_fetched_queue_item_))
+  //}
+  
+  StreamingStatus status = StreamingStatus::WaitQueueTimeOut;
+  for (size_t i = 0; i < input_queue_ids_.size(); ++i) {
+    ObjectID q_id = input_queue_ids_[i];
+    STREAMING_LOG(DEBUG) << "[LPQ] search channel" << q_id 
+                        << " total channel num " << input_queue_ids_.size();
+    status = StashMessage(q_id);
+    if (status == StreamingStatus::OK) {
+        break;
+    }
   }
+  if (status != StreamingStatus::OK) {
+    return status;
+  }
+
   message = reader_merger_->top();
   last_fetched_queue_item_ = message;
   auto &offset_info = channel_info_map_[message->from];
@@ -242,7 +279,12 @@ StreamingStatus DataReader::GetBundle(const uint32_t timeout_ms,
         STREAMING_LOG(INFO) << "merger vector item => " << bundle->from;
       }
     }
-    RETURN_IF_NOT_OK(GetMergedMessageBundle(message, is_valid_break));
+    //RETURN_IF_NOT_OK(GetMergedMessageBundle(message, is_valid_break));
+    StreamingStatus status_bundle = GetMergedMessageBundle(message, is_valid_break);
+    if (status_bundle != StreamingStatus::OK) {
+        STREAMING_LOG(DEBUG) << "[LPQ] GetBundle Timeout ";
+        continue;
+    }
     if (!is_valid_break) {
       empty_bundle_cnt++;
       NotifyConsumed(message);

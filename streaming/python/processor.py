@@ -34,7 +34,7 @@ class ReadTextFile:
             if not record:
                 self.reader.close()
                 return
-            #logger.info("source push {}".format(record[:-1]))
+            logger.info("source push {}".format(record[:-1]))
             output_gate.push(
                 record[:-1])  # Push after removing newline characters
 
@@ -294,12 +294,10 @@ class Reduce:
     def process(self, record):
         if record is None:
             record = self.input_gate.pull()
-            #logger.info("reduce {}".format(record))
             if record is None:
                 return False
 
         key, rest = record
-        #logger.info("reduce {}".format(record))
         new_value = self._attribute_selector(rest)
         try:
             old_value = self.state[key]

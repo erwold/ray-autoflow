@@ -166,7 +166,8 @@ Status WriterQueue::TryEvictItems() {
 }
 
 void WriterQueue::OnNotify(std::shared_ptr<NotificationMessage> notify_msg) {
-  STREAMING_LOG(INFO) << "OnNotify target seq_id: " << notify_msg->SeqId();
+    STREAMING_LOG(INFO) << "OnNotify target q_id " << notify_msg->QueueId()
+                        << " seq_id: " << notify_msg->SeqId();
   min_consumed_id_ = notify_msg->SeqId();
 }
 

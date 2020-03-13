@@ -304,6 +304,14 @@ cdef class DataReader:
         self.reader.Stop()
         channel_logger.info("stopped DataReader")
 
+    def close(self, bytes channel_id):
+        cdef:
+            CObjectID queue_id
+            c_string q_id_data
+        q_id_data = channel_id
+        assert q_id_data.size() == CObjectID.Size()
+        queue_id = CObjectID.FromBinary(q_id_data)
+        self.reader.RemoveChannel(queue_id)
 
 cdef c_vector[CObjectID] bytes_list_to_qid_vec(list py_queue_ids) except *:
     assert len(py_queue_ids) > 0

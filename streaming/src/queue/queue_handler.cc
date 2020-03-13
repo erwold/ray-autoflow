@@ -350,6 +350,7 @@ void DownstreamQueueMessageHandler::OnData(std::shared_ptr<DataMessage> msg) {
     return;
   }
 
+  STREAMING_LOG(DEBUG) << "[LPQ] OnData from qid " << msg->QueueId();
   QueueItem item(msg);
   queue->OnData(item);
 }

@@ -132,6 +132,7 @@ cdef extern from "data_reader.h" namespace "ray::streaming" nogil:
         CStreamingStatus GetBundle(const uint32_t timeout_ms,
                                    shared_ptr[CDataBundle] &message)
         void Stop()
+        void RemoveChannel(CObjectID q_id)
 
 
 cdef extern from "data_writer.h" namespace "ray::streaming" nogil:

@@ -105,6 +105,8 @@ class DataReader {
   //// Notify message related channel to clear data.
   void NotifyConsumed(std::shared_ptr<DataBundle> &message);
 
+  void RemoveChannel(ObjectID q_id);
+
  private:
   /// Create channels and connect to all upstream.
   StreamingStatus InitChannel();
@@ -117,6 +119,7 @@ class DataReader {
 
   StreamingStatus StashNextMessage(std::shared_ptr<DataBundle> &message);
 
+  StreamingStatus StashMessage(ObjectID q_id);
   StreamingStatus GetMessageFromChannel(ConsumerChannelInfo &channel_info,
                                         std::shared_ptr<DataBundle> &message);
 

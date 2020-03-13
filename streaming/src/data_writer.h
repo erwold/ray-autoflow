@@ -112,12 +112,15 @@ class DataWriter {
 
   void FlowControlTimer();
 
+  void StatisticTimer();
  private:
   std::shared_ptr<EventService> event_service_;
 
   std::shared_ptr<std::thread> empty_message_thread_;
 
   std::shared_ptr<std::thread> flow_control_thread_;
+
+  std::shared_ptr<std::thread> statistic_thread_;
   // One channel have unique identity.
   std::vector<ObjectID> output_queue_ids_;
   // Flow controller makes a decision when it's should be blocked and avoid

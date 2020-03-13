@@ -107,13 +107,16 @@ class DataInput:
             item = self.reader.read(100)
         msg_data = item.body()
         if msg_data == _CLOSE_FLAG:
+            logger.info("recv close flag from {}".format(item.channel_id()))
             self.closed[item.channel_id] = True
-            logger.debug("[reader] recv close channel {}")
+            self.reader.close_channel(item.channel_id())
             if len(self.closed) == len(self.input_channels):
                 return None
             else:
                 return self.pull()
         else:
+            logger.info("recv record '{}' from {}".format(
+                    pickle.loads(msg_data), item.channel_id()))
             return pickle.loads(msg_data)
 
     def close(self):
@@ -227,7 +230,7 @@ class DataOutput:
         """
         for c in self.channels:
             self.writer.write(c.qid, _CLOSE_FLAG)
-        logger.debug("[writer] close channel {}")
+            logger.info("close channel {}".format(c.qid))
         # must ensure DataWriter send None flag to peer actor
         self.writer.stop()
 
@@ -235,7 +238,7 @@ class DataOutput:
         target_channels = []
         # Forward record
         for c in self.forward_channels:
-            logger.debug("[writer] Push record '{}' to channel {}".format(
+            logger.info("[writer] Push record '{}' to channel {}".format(
                 record, c))
             target_channels.append(c)
         # Forward record
@@ -245,7 +248,7 @@ class DataOutput:
             if self.round_robin_indexes[index] == len(channels):
                 self.round_robin_indexes[index] = 0  # Reset index
             c = channels[self.round_robin_indexes[index]]
-            logger.debug("[writer] Push record '{}' to channel {}".format(
+            logger.info("[writer] Push record '{}' to channel {}".format(
                 record, c))
             target_channels.append(c)
             index += 1
@@ -256,7 +259,7 @@ class DataOutput:
             for channels in self.shuffle_key_channels:
                 num_instances = len(channels)  # Downstream instances
                 c = channels[h % num_instances]
-                logger.debug(
+                logger.info(
                     "[key_shuffle] Push record '{}' to channel {}".format(
                         record, c))
                 target_channels.append(c)
@@ -265,7 +268,7 @@ class DataOutput:
             for channels in self.shuffle_channels:
                 num_instances = len(channels)  # Downstream instances
                 c = channels[h % num_instances]
-                logger.debug("[shuffle] Push record '{}' to channel {}".format(
+                logger.info("[shuffle] Push record '{}' to channel {}".format(
                     record, c))
                 target_channels.append(c)
         else:  # TODO (john): Handle rescaling

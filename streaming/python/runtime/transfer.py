@@ -258,7 +258,9 @@ class DataReader:
 
     def close(self):
         logger.info("closing Data Reader.")
-
+    
+    def close_channel(self, channel_id):
+        self.reader.close(channel_id_str_to_bytes(channel_id))
 
 def _to_native_conf(conf):
     config = streaming_pb.StreamingConfig()
