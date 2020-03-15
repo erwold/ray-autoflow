@@ -208,6 +208,13 @@ StreamingStatus StreamingQueueConsumer::NotifyChannelConsumed(uint64_t offset_id
   return StreamingStatus::OK;
 }
 
+bool StreamingQueueConsumer::hasChannelData() {
+  bool is_queue_empty = queue_->IsPendingEmpty();
+  STREAMING_LOG(DEBUG) << "[LPQ] qid: " << queue_->QueueId()
+                       << " hasChannelData " << !is_queue_empty;
+  return !is_queue_empty;
+}
+
 // For mock queue transfer
 struct MockQueueItem {
   uint64_t seq_id;

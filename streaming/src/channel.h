@@ -109,6 +109,8 @@ class ConsumerChannel {
                                                  uint32_t timeout) = 0;
   virtual StreamingStatus NotifyChannelConsumed(uint64_t offset_id) = 0;
 
+  virtual bool hasChannelData() = 0;
+
  protected:
   std::shared_ptr<Config> transfer_config_;
   ConsumerChannelInfo &channel_info_;
@@ -149,6 +151,7 @@ class StreamingQueueConsumer : public ConsumerChannel {
   StreamingStatus ConsumeItemFromChannel(uint64_t &offset_id, uint8_t *&data,
                                          uint32_t &data_size, uint32_t timeout) override;
   StreamingStatus NotifyChannelConsumed(uint64_t offset_id) override;
+  bool hasChannelData() override;
 
  private:
   std::shared_ptr<ReaderQueue> queue_;
@@ -194,6 +197,7 @@ class MockConsumer : public ConsumerChannel {
   StreamingStatus ConsumeItemFromChannel(uint64_t &offset_id, uint8_t *&data,
                                          uint32_t &data_size, uint32_t timeout) override;
   StreamingStatus NotifyChannelConsumed(uint64_t offset_id) override;
+  bool hasChannelData() override { return false; }
 };
 
 }  // namespace streaming

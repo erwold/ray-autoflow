@@ -51,6 +51,7 @@ class DataReader {
 
   std::shared_ptr<DataBundle> last_fetched_queue_item_;
 
+  bool is_removing_channel_;
   int64_t timer_interval_;
   int64_t last_bundle_ts_;
   int64_t last_message_ts_;
@@ -119,7 +120,6 @@ class DataReader {
 
   StreamingStatus StashNextMessage(std::shared_ptr<DataBundle> &message);
 
-  StreamingStatus StashMessage(ObjectID q_id);
   StreamingStatus GetMessageFromChannel(ConsumerChannelInfo &channel_info,
                                         std::shared_ptr<DataBundle> &message);
 

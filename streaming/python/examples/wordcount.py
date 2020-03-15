@@ -97,7 +97,7 @@ if __name__ == "__main__":
                 .flat_map(splitter) \
                 .key_by(0) \
                 .sum(1) \
-                .inspect(lpq)     # Prints the contents of the
+                .inspect(print)     # Prints the contents of the
     # stream to stdout
     start = time.time()
     env_handle = env.execute()  # Deploys and executes the dataflow

@@ -83,6 +83,8 @@ class Queue {
   /// Return item count in processed state.
   size_t ProcessedCount();
 
+  ObjectID QueueId() { return queue_id_; }
+
  protected:
   ObjectID queue_id_;
   std::list<QueueItem> buffer_queue_;
