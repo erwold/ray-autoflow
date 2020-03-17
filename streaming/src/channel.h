@@ -64,6 +64,12 @@ struct ConsumerChannelInfo {
   ActorID actor_id;
   // Total count of notify request.
   uint64_t notify_cnt = 0;
+
+  //record some statistics
+  uint64_t last_notify_cnt = 0;
+  uint64_t last_last_seq_id = 0;
+  uint64_t recv_message_cnt = 0;
+  uint64_t processed_msg_cnt = 0;
 };
 
 /// Two types of channel are presented:

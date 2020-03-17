@@ -60,6 +60,7 @@ void DataReader::Init(const std::vector<ObjectID> &input_ids,
        [](const ObjectID &a, const ObjectID &b) { return a.Hash() < b.Hash(); });
   std::copy(input_ids.begin(), input_ids.end(), std::back_inserter(unready_queue_ids_));
   InitChannel();
+  statistic_thread_ = std::make_shared<std::thread>(&DataReader::StatisticTimer, this);
 }
 
 void DataReader::RemoveChannel(ObjectID q_id) {
@@ -92,6 +93,35 @@ StreamingStatus DataReader::InitChannel() {
   runtime_context_->SetRuntimeStatus(RuntimeStatus::Running);
   STREAMING_LOG(INFO) << "[Reader] Reader construction done!";
   return StreamingStatus::OK;
+}
+
+void DataReader::StatisticTimer() {
+    std::chrono::milliseconds MockTimer(1000);
+    while(true) {
+        std::this_thread::sleep_for(MockTimer);
+        if (runtime_context_->GetRuntimeStatus() != RuntimeStatus::Running) {
+            return;
+        }
+
+        for (auto &input_queue : input_queue_ids_) {
+            if (runtime_context_->GetRuntimeStatus() != RuntimeStatus::Running) {
+                return;
+            }
+            ConsumerChannelInfo &channel_info = channel_info_map_[input_queue];
+            channel_map_[channel_info.channel_id]->RefreshChannelInfo();
+
+            channel_info.recv_message_cnt = channel_info.queue_info.last_seq_id
+                                            - channel_info.last_last_seq_id;
+            channel_info.processed_msg_cnt = channel_info.notify_cnt 
+                                            - channel_info.last_notify_cnt;
+
+            channel_info.last_notify_cnt = channel_info.notify_cnt;
+            channel_info.last_last_seq_id = channel_info.queue_info.last_seq_id;
+            STREAMING_LOG(DEBUG) << "[LPQINFO] [Reader] qid " << channel_info.channel_id
+                                 << " num records recv: " << channel_info.recv_message_cnt
+                                 << " num records processed: " << channel_info.processed_msg_cnt;
+        }
+    }
 }
 
 StreamingStatus DataReader::InitChannelMerger() {
@@ -299,7 +329,13 @@ void DataReader::NotifyConsumedItem(ConsumerChannelInfo &channel_info, uint64_t 
 DataReader::DataReader(std::shared_ptr<RuntimeContext> &runtime_context)
     : transfer_config_(new Config()), runtime_context_(runtime_context) {}
 
-DataReader::~DataReader() { STREAMING_LOG(INFO) << "Streaming reader deconstruct."; }
+DataReader::~DataReader() { 
+    if (statistic_thread_->joinable()) {
+        STREAMING_LOG(INFO) << "Statistic timer thread waiting for join"; 
+        statistic_thread_->join();
+    }
+    STREAMING_LOG(INFO) << "Streaming reader deconstruct."; 
+}
 
 void DataReader::Stop() {
   runtime_context_->SetRuntimeStatus(RuntimeStatus::Interrupted);

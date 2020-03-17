@@ -62,6 +62,8 @@ class DataReader {
 
   static const uint32_t kReadItemTimeout;
 
+  std::shared_ptr<std::thread> statistic_thread_;
+
  protected:
   std::unordered_map<ObjectID, ConsumerChannelInfo> channel_info_map_;
   std::unordered_map<ObjectID, std::shared_ptr<ConsumerChannel>> channel_map_;
@@ -126,6 +128,8 @@ class DataReader {
   /// Get top item from prioprity queue.
   StreamingStatus GetMergedMessageBundle(std::shared_ptr<DataBundle> &message,
                                          bool &is_valid_break);
+
+  void StatisticTimer();
 };
 }  // namespace streaming
 }  // namespace ray

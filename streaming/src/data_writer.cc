@@ -457,6 +457,8 @@ void DataWriter::NotifyConsumedItem(ProducerChannelInfo &channel_info, uint32_t 
 void DataWriter::StatisticTimer() {
   std::chrono::milliseconds MockTimer(1000);
   while(true) {
+    std::this_thread::sleep_for(MockTimer);
+
     if (runtime_context_->GetRuntimeStatus() != RuntimeStatus::Running) {
       return;
     }
@@ -478,15 +480,13 @@ void DataWriter::StatisticTimer() {
                                         channel_info.last_consumed_seq_id;
       channel_info.last_current_message_id = channel_info.current_message_id;
       channel_info.last_consumed_seq_id = channel_info.queue_info.consumed_seq_id;
-      STREAMING_LOG(DEBUG) << "[LPQInfo] qid " << channel_info.channel_id
+      STREAMING_LOG(DEBUG) << "[LPQInfo] [Writer] qid " << channel_info.channel_id
                            << " num records sent: " << channel_info.sent_message_cnt
-                           //<< " num records processed: " << channel_info.processed_msg_cnt;
+                           << " num records processed: " << channel_info.processed_msg_cnt
                            << " consumed_seq_id " << channel_info.queue_info.consumed_seq_id
                            << " last_consumed_seq_id " << channel_info.last_consumed_seq_id;
     
     }
-
-    std::this_thread::sleep_for(MockTimer);
   }
 }
 
