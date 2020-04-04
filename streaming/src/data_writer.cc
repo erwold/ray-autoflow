@@ -490,6 +490,15 @@ void DataWriter::StatisticTimer() {
   }
 }
 
+float DataWriter::GetRatio(ObjectID queue_id) {
+    float ratio = 1.0f;
+    ProducerChannelInfo &channel_info = channel_info_map_[queue_id];
+    if (channel_info.sent_message_cnt != 0) {
+        ratio = channel_info.processed_msg_cnt / channel_info.sent_message_cnt;
+    }
+    return ratio;
+}
+
 void DataWriter::FlowControlTimer() {
   std::chrono::milliseconds MockTimer(
       runtime_context_->GetConfig().GetEventDrivenFlowControlInterval());

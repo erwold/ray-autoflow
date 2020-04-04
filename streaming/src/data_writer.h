@@ -65,6 +65,7 @@ class DataWriter {
   ///  \param offset_map (return value)
   void GetOffsetInfo(std::unordered_map<ObjectID, ProducerChannelInfo> *&offset_map);
 
+  float GetRatio(ObjectID q_id);
  private:
   bool IsMessageAvailableInBuffer(ProducerChannelInfo &channel_info);
 

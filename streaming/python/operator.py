@@ -43,6 +43,7 @@ class OpType(enum.Enum):
     ReadTextFile = 9
     Reduce = 10
     Sum = 11
+    LocalReduce = 12
     # ...
 
 
@@ -125,6 +126,7 @@ class OperatorChain:
     def init(self, input_gate, output_gate):
         next_processor = None
         # reversely initialize each processor
+        #todo: sink operator shouldn't have an output_gate
         if len(self.operator_list) == 1:
             operator = self.operator_list.pop()
             self.head_processor = operator.processor_class(operator)

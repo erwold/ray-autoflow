@@ -196,6 +196,9 @@ class DataWriter:
     def close(self):
         logger.info("closing channel writer.")
 
+    def get_ratio(self, q_id):
+        return self.writer.get_ratio(channel_id_str_to_bytes(q_id))
+
 
 class DataReader:
     """Data Reader is wrapper of streaming c++ DataReader, which read data

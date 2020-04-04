@@ -282,3 +282,22 @@ class DataOutput:
     def push_all(self, records):
         for record in records:
             self.push(record)
+
+    def get_channel_ratio(self, channel_id):
+        return self.writer.get_ratio(channel_id)
+
+    def get_keyby_channels(self):
+        # only for the use of LocalReduce operator
+        assert len(self.shuffle_key_channels) == 1
+        return self.shuffle_key_channels[0]
+
+    def push_record_to_channel(self, str_qid, state):
+        #queue_id = ray.ObjectID(transfer.channel_id_str_to_bytes(qid))
+        channel_id = ChannelID(str_qid)
+        for key, value in state.items():
+            record = (key, (key, value))
+            logger.info(
+                "[key_shuffle] Push record '{}' to channel {}".format(
+                    record, str_qid))
+            msg_data = pickle.dumps(record)
+            self.writer.write(channel_id, msg_data)

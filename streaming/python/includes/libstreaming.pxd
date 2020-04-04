@@ -146,6 +146,7 @@ cdef extern from "data_writer.h" namespace "ray::streaming" nogil:
                 const CObjectID &q_id, uint8_t *data, uint32_t data_size)
         void Run()
         void Stop()
+        float GetRatio(CObjectID q_id)
 
 
 cdef extern from "ray/common/buffer.h" nogil:

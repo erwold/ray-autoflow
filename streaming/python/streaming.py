@@ -234,6 +234,7 @@ class ExecutionGraph:
         #todo warning: all chained operators have the same num_instance
         for node in nx.topological_sort(self.env.logical_topo):
             op_type = self.env.operators[node].type
+            #todo localReduce
             if op_type == OpType.KeyBy or op_type == OpType.ReadTextFile:
                 operator_list.append(self.env.operators[node])
                 operator_chain = OperatorChain(operator_list)
@@ -505,6 +506,7 @@ class DataStream:
             partitioning, _ = src_operator._get_partition_strategy(self.id)
             src_operator._set_partition_strategy(self.id, partitioning,
                                                  operator.id)
+        #todo localReduce
         elif src_operator.type == OpType.KeyBy:
             # Set the output partitioning strategy to shuffle by key
             partitioning = PScheme(PStrategy.ShuffleByKey)
@@ -637,6 +639,18 @@ class DataStream:
             processor.Reduce,
             "Sum",
             reduce_fn,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
+    def local_sum(self, attribute_selector, state_keeper=None):
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.LocalReduce,
+            processor.LocalReduce,
+            "LocalSum",
+            _sum,
+            other=attribute_selector,
+            state_actor=state_keeper,
             num_instances=self.env.config.parallelism)
         return self.__register(op)
 

@@ -205,6 +205,17 @@ cdef class DataWriter:
         self.writer.Stop()
         channel_logger.info("stopped DataWriter")
 
+    def get_ratio(self, bytes channel_id):
+        cdef:
+            float ratio
+            CObjectID queue_id
+            c_string q_id_data
+        q_id_data = channel_id
+        assert q_id_data.size() == CObjectID.Size()
+        queue_id = CObjectID.FromBinary(q_id_data)
+        ratio = self.writer.GetRatio(queue_id)
+        return ratio
+
 
 cdef class DataReader:
     cdef:
