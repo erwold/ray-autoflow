@@ -144,14 +144,14 @@ class ExecutionGraph:
                     # ID of destination instance to connect
                     id = i % num_dest_instances
                     qid = self._gen_str_qid(operator_chain.id, i, dst_operator, id)
-                    c = DataChannel(operator_chain.id, i, dst_operator, id, qid)
+                    c = DataChannel(operator_chain.id, i, dst_operator, id, qid, operator_chain.last_id)
                     entry.append(c)
             elif p_scheme.strategy in all_to_all_strategies:
                 for i in range(operator_chain.num_instances):
                     for j in range(num_dest_instances):
                         qid = self._gen_str_qid(operator_chain.id, i, dst_operator,
                                                 j)
-                        c = DataChannel(operator_chain.id, i, dst_operator, j, qid)
+                        c = DataChannel(operator_chain.id, i, dst_operator, j, qid, operator_chain.last_id)
                         entry.append(c)
             else:
                 # TODO (john): Add support for other partitioning strategies
@@ -173,6 +173,7 @@ class ExecutionGraph:
         return task_id
 
     def get_task_id(self, op_id, op_instance_id):
+        #logger.info("task_ids {}".format(self.task_ids))
         return self.task_ids[(op_id, op_instance_id)]
 
     def get_actor(self, op_id, op_instance_id):
@@ -231,11 +232,19 @@ class ExecutionGraph:
 
     def build_chaining(self):
         operator_list = []
-        #todo warning: all chained operators have the same num_instance
+        # todo warning: all chained operators have the same num_instance
         for node in nx.topological_sort(self.env.logical_topo):
             op_type = self.env.operators[node].type
-            #todo localReduce
-            if op_type == OpType.KeyBy or op_type == OpType.ReadTextFile:
+            in_degree = self.env.logical_topo.in_degree(node)
+            if in_degree == 0:
+                operator_list.append(self.env.operators[node])
+                successors = list(self.env.logical_topo.successors(node))
+                assert len(successors) == 1
+                if self.env.operators[successors[0]].type != OpType.KeyBy:
+                    operator_chain = OperatorChain(operator_list)
+                    self.chained_operators.append(operator_chain)
+                    operator_list = []
+            elif op_type == OpType.KeyBy:
                 operator_list.append(self.env.operators[node])
                 operator_chain = OperatorChain(operator_list)
                 self.chained_operators.append(operator_chain)
@@ -492,30 +501,37 @@ class DataStream:
              operator (Operator): The metadata of the logical operator.
         """
         self.env.operators[operator.id] = operator
-        self.dst_operator_id = operator.id
-        logger.debug("Adding new dataflow edge ({},{}) --> ({},{})".format(
-            self.src_operator_id,
-            self.env.operators[self.src_operator_id].name,
-            self.dst_operator_id,
-            self.env.operators[self.dst_operator_id].name))
-        # Update logical dataflow graphs
-        self.env._add_edge(self.src_operator_id, self.dst_operator_id)
-        # Keep track of the partitioning strategy and the destination operator
-        src_operator = self.env.operators[self.src_operator_id]
-        if self.is_partitioned is True:
-            partitioning, _ = src_operator._get_partition_strategy(self.id)
-            src_operator._set_partition_strategy(self.id, partitioning,
-                                                 operator.id)
-        #todo localReduce
-        elif src_operator.type == OpType.KeyBy:
-            # Set the output partitioning strategy to shuffle by key
-            partitioning = PScheme(PStrategy.ShuffleByKey)
-            src_operator._set_partition_strategy(self.id, partitioning,
-                                                 operator.id)
-        else:  # No partitioning strategy has been defined - set default
-            partitioning = PScheme(PStrategy.Forward)
-            src_operator._set_partition_strategy(self.id, partitioning,
-                                                 operator.id)
+        # self.dst_operator_id = operator.id
+        input_streams = [self]
+        if operator.type == OpType.Join or operator.type == OpType.TimeWindowJoin:
+            input_streams.append(operator.right_stream)
+
+        for input_stream in input_streams:
+            input_stream.dst_operator_id = operator.id
+            logger.debug("Adding new dataflow edge ({},{}) --> ({},{})".format(
+                input_stream.src_operator_id,
+                input_stream.env.operators[input_stream.src_operator_id].name,
+                input_stream.dst_operator_id,
+                input_stream.env.operators[input_stream.dst_operator_id].name))
+            # Update logical dataflow graphs
+            input_stream.env._add_edge(self.src_operator_id, self.dst_operator_id)
+            # Keep track of the partitioning strategy and the destination operator
+            src_operator = input_stream.env.operators[
+                                        input_stream.src_operator_id]
+            if input_stream.is_partitioned is True:
+                partitioning, _ = src_operator._get_partition_strategy(
+                                                        input_stream.id)
+                src_operator._set_partition_strategy(self.id, partitioning,
+                                                    operator.id)
+            elif src_operator.type == OpType.KeyBy:
+                # Set the output partitioning strategy to shuffle by key
+                partitioning = PScheme(PStrategy.ShuffleByKey)
+                src_operator._set_partition_strategy(self.id, partitioning,
+                                                    operator.id)
+            else:  # No partitioning strategy has been defined - set default
+                partitioning = PScheme(PStrategy.Forward)
+                src_operator._set_partition_strategy(self.id, partitioning,
+                                                    operator.id)
         return self.__expand()
 
     # Sets the level of parallelism for an operator, i.e. its total
@@ -710,6 +726,69 @@ class DataStream:
             num_instances=self.env.config.parallelism)
         return self.__register(op)
 
+    # Registers a join operator to the environment
+    def join(self, right_stream, join_logic):
+        """Joins two streams based on a user-defined logic.
+
+        Attributes:
+            right_stream (DataStream): The stream to join with self.
+            join_logic (object): A class specifying the join logic.
+        """
+        assert isinstance(right_stream, DataStream), type(right_stream)
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.Join,
+            processor.Join,
+            "Join",
+            join_logic,
+            right_stream=right_stream,
+            left_operator_id=self.src_operator_id,
+            right_operator_id=right_stream.src_operator_id,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
+    # Registers a event time window operator to the environment
+    def event_time_window(self, window_length_ms, slide_ms,
+                          aggregation_logic=None, offset=0):
+        """Applies a event time window to the stream.
+
+        Attributes:
+            window_lenght_ms (int): The length of the window in ms.
+        """
+        others = [window_length_ms, slide_ms, offset]
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.EventTimeWindow,
+            processor.EventTimeWindow,
+            "EventTimeWindow",
+            aggregation_logic,
+            other=others,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
+    # Registers a event time window join operator to the environment
+    def time_window_join(self, right_stream, window_length_ms, slide_ms,
+                          join_logic, offset=0):
+        """Applies a event time window to the stream.
+
+        Attributes:
+            window_lenght_ms (int): The length of the window in ms.
+        """
+        assert isinstance(right_stream, DataStream), type(right_stream)
+        others = [window_length_ms, slide_ms, offset]
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.TimeWindowJoin,
+            processor.TimeWindowJoin,
+            "TimeWindowJoin",
+            join_logic,
+            right_stream=right_stream,
+            left_operator_id=self.src_operator_id,
+            right_operator_id=right_stream.src_operator_id,
+            other=others,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
     # Registers inspect operator to the environment
     def inspect(self, inspect_logic):
         """Inspects the content of the stream.
@@ -729,12 +808,13 @@ class DataStream:
     # Registers sink operator to the environment
     # TODO (john): A sink now just drops records but it should be able to
     # export data to other systems
-    def sink(self):
+    def sink(self, logic):
         """Closes the stream with a sink operator."""
         op = Operator(
             self.env.gen_operator_id(),
             OpType.Sink,
             processor.Sink,
             "Sink",
+            logic,
             num_instances=self.env.config.parallelism)
         return self.__register(op)

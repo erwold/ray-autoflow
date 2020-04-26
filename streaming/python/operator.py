@@ -44,6 +44,9 @@ class OpType(enum.Enum):
     Reduce = 10
     Sum = 11
     LocalReduce = 12
+    Join = 13
+    EventTimeWindow = 14
+    TimeWindowJoin = 15
     # ...
 
 
@@ -57,7 +60,10 @@ class Operator:
                  logic=None,
                  num_instances=1,
                  other=None,
-                 state_actor=None):
+                 state_actor=None,
+                 right_stream=None,
+                 left_operator_id=None,
+                 right_operator_id=None):
         self.id = id
         self.type = op_type
         self.processor_class = processor_class
@@ -68,6 +74,10 @@ class Operator:
         self.partitioning_strategies = {}
         self.other_args = other  # Depends on the type of the operator
         self.state_actor = state_actor  # Actor to query state
+        self.right_stream = right_stream   # For join operator
+        self.left_operator_id = left_operator_id
+        self.right_operator_id = right_operator_id
+        self.instance_id = None
 
     # Sets the partitioning scheme for an output stream of the operator
     def _set_partition_strategy(self,
@@ -105,6 +115,9 @@ class Operator:
                        self.num_instances, self.partitioning_strategies,
                        self.other_args))
 
+    def set_instance_id(self, id):
+        self.instance_id = id
+
     @property
     def logic(self):
         return cloudpickle.loads(self._logic)
@@ -115,13 +128,22 @@ class OperatorChain:
         self.head_processor = None
         # todo: set num_instances to that of the last operator
         self.id = operator_list[0].id
+        self.last_id = operator_list[-1].id
         self.num_instances = operator_list[-1].num_instances
         self.partitioning_strategies = operator_list[-1].partitioning_strategies
 
+        self.is_join = True if (operator_list[0].name == "Join" or
+                                operator_list[0].name == "TimeWindowJoin") else False
+        self.is_source = True if operator_list[0].name == "Source" else False
         self.type = "{"
         for operator in operator_list:
             self.type += " " + operator.name
         self.type += "}"
+
+    # only for source operator
+    def set_instance_id(self, id):
+        assert self.is_source is True
+        self.operator_list[0].set_instance_id(id)
 
     def init(self, input_gate, output_gate):
         next_processor = None

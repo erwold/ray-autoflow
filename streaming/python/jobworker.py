@@ -65,12 +65,16 @@ class JobWorker:
                 core_worker, writer_async_func, writer_sync_func)
         if len(self.input_channels) > 0:
             self.input_gate = DataInput(env, self.input_channels)
+            if self.operator_chain.is_join:
+                self.input_gate.set_join(self.operator_chain.operator_list[0])
             self.input_gate.init()
         if len(self.output_channels) > 0:
             self.output_gate = DataOutput(
                 env, self.output_channels,
                 self.operator_chain.partitioning_strategies)
             self.output_gate.init()
+        if self.operator_chain.is_source:
+            self.operator_chain.set_instance_id(self.worker_id[1])
         logger.info("init operator instance %s succeed", self.processor_name)
         return True
 

@@ -2,6 +2,7 @@ import logging
 import sys
 import time
 import types
+import math
 from ray.streaming.communication import _hash
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,36 @@ class Filter:
             self.downstream_operator.process(record)
         else:
             self.output_gate.push(record)
+        return True
+
+class Sink:
+
+    def __init__(self, operator):
+        self.sink = operator.logic
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def process(self, record):
+        if self.input_gate:
+            record = self.input_gate.pull()
+        if record is None:
+            if self.downstream_operator:
+                return self.downstream_operator.process(record)
+            else:
+                return False
+        result = self.sink.evict(record)
+        if result is not None:
+            print("latency: {}".format(result))
+        # if self.downstream_operator:
+        #    self.downstream_operator.process(record)
+        # elif self.output_gate:
+        #    self.output_gate.push(record)
         return True
 
 
@@ -442,7 +473,8 @@ class KeyBy:
         if isinstance(self.key_selector, int):
             self._key_selector = lambda r: r[self.key_selector]
         elif isinstance(self.key_selector, str):
-            self._key_selector = lambda record: vars(record)[self.key_selector]
+            #self._key_selector = lambda record: vars(record)[self.key_selector]
+            self._key_selector = lambda record: record[self.key_selector]
         elif not isinstance(self.key_selector, types.FunctionType):
             sys.exit("Unrecognized or unsupported key selector.")
         self.downstream_operator = None
@@ -484,14 +516,228 @@ class KeyBy:
         return True
 
 
+
+class EventTimeWindow:
+    """An event time window operator instance (tumbling or sliding)"""
+
+    def __init__(self, operator):
+        assert len(operator.other_args) == 3
+        self.window_length_ms = operator.other_args[0]
+        self.slide_ms = operator.other_args[1]
+        self.aggregator = operator.logic
+        self.state = {}
+        self.offset = operator.other_args[2]
+        self.range = math.trunc(math.ceil(
+                                self.window_length_ms / self.slide_ms))
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def collect_expired_windows(self, event_time):
+        result = []
+        min_open_window = (event_time // self.slide_ms) - self.range + 1
+        indexes = []
+        for w, window in self.state.items():
+            if w < min_open_window:
+                if self.aggregator is None:
+                    for record in window:
+                        record.window = w
+                        record.system_time = event_time
+                    result += window
+                else:
+                    for auction, count in window.items():
+                        record = {
+                            "auction": auction,
+                            "count": count,
+                            "window": w,
+                            "system_time": event_time,
+                            "event_type": "Record",
+                        }
+                        result.append(record)
+                indexes.append(w)
+                logger.info("Firing window {} on time {}".format(w, event_time))
+        for i in indexes:
+            self.state.pop(i)
+        return result
+
+    def __find_windows(self, record):
+        windows = []
+        event_time = record["dateTime"]
+        slot = -1
+        slot = event_time // self.slide_ms
+        window_end = (slot * self.slide_ms) + self.window_length_ms
+        if event_time > window_end:
+            return windows
+        min = slot - self.range + 1
+        min_window_id = min if min >= self.offset else self.offset
+        max_window_id = slot if slot >= self.offset else self.offset
+        windows = list(range(min_window_id, max_window_id + 1))
+        return windows
+
+    def __assigner(self, record):
+        windows = self.__find_windows(record)
+        if self.aggregator is not None:
+            for w in windows:
+                if w not in self.state:
+                    self.state[w] = self.aggregator.initialize_window()
+                self.aggregator.update(self.state[w], record)
+        else:
+            for w in windows:
+                if w not in self.state:
+                    self.state[w] = []
+                self.state[w].append(record)
+
+    def process(self, record):
+        # todo: Flush the rest state when EOF reach?
+        if self.input_gate:
+            record = self.input_gate.pull()
+        if record is None:
+            if self.downstream_operator:
+                return self.downstream_operator.process(record)
+            else:
+                return False
+
+        self.__assigner(record)
+        windows = self.collect_expired_windows(record["dateTime"])
+
+        if len(windows) > 0:
+            if self.downstream_operator:
+                # todo: if there is downstream operator, should we split them?
+                self.downstream_operator.process(windows)
+            else:
+                self.output_gate.push_all(windows)
+
+        return True
+
+
+class TimeWindowJoin:
+    """An event time window join operator instance that join two streams."""
+    def __init__(self, operator):
+        assert len(operator.other_args) == 3
+        self.window_length_ms = operator.other_args[0]
+        self.slide_ms = operator.other_args[1]
+        self.join_logic = operator.logic
+        assert(self.join_logic is not None), (self.join_logic)
+        self.state = {}
+        self.offset = operator.other_args[2]
+        self.range = math.trunc(math.ceil(
+                                self.window_length_ms / self.slide_ms))
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def expired_left_windows(self, event_time):
+        while len(self.join_logic.left_state) > 0 and self.join_logic.left_state[0]["dateTime"] < event_time:
+            record = self.join_logic.left_state.pop(0)
+            logger.info("Firing left_state record {} on time {}".format(record, event_time))
+
+    def expired_right_windows(self, event_time):
+        while len(self.join_logic.right_state) > 0 and self.join_logic.right_state[0]["dateTime"] < event_time:
+            record = self.join_logic.right_state.pop(0)
+            logger.info("Firing right_state record {} on time {}".format(record, event_time))
+
+    def __find_windows(self, record):
+        event_time = record["dateTime"]
+        slot = -1
+        slot = event_time // self.slide_ms
+        window_start = (slot - self.range + 1) * self.slide_ms
+        window_end = (slot * self.slide_ms) + self.window_length_ms
+        if event_time > window_end:
+            return []
+        return [window_start, window_end]
+
+    def process(self, record):
+        # todo: Flush the rest state when EOF reach?
+        if self.input_gate:
+            records = self.input_gate.pull()
+        if records is None:
+            if self.downstream_operator:
+                return self.downstream_operator.process(records)
+            else:
+                return False
+
+        from_which, record = records
+        window_range = self.__find_windows(record)
+        if from_which is "left":
+            self.expired_right_windows(window_range[0])
+            self.process_logic = self.join_logic.process_left
+        else:
+            self.expired_left_windows(window_range[0])
+            self.process_logic = self.join_logic.process_right
+
+        results = self.process_logic(window_range, record)
+
+        if len(results) > 0:
+            if self.downstream_operator:
+                # todo: if there is downstream operator, should we split them?
+                self.downstream_operator.process(results)
+            else:
+                self.output_gate.push_all(results)
+
+        return True
+
+
+class Join:
+    """A join operator instance that join two streams."""
+
+    def __init__(self, operator):
+        self.join_logic = operator.logic
+        assert(self.join_logic is not None), (self.join_logic)
+        self.process_logic = None
+
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def process(self, record):
+        # todo: actually, join operator shouldn't be chained
+        if self.input_gate:
+            records = self.input_gate.pull()
+        if records is None:
+            if self.downstream_operator:
+                return self.downstream_operator.process(records)
+            else:
+                return False
+
+        from_which, record = records
+        if from_which is "left":
+            self.process_logic = self.join_logic.process_left
+        else:
+            self.process_logic = self.join_logic.process_right
+
+        records = self.process_logic(record)
+
+        if self.downstream_operator:
+            self.downstream_operator.process(records)
+        else:
+            self.output_gate.push_all(records)
+        return True
+
 # A custom source actor
 class Source:
     def __init__(self, operator):
         # The user-defined source with a get_next() method
         self.source = operator.logic
+        self.instance_id = operator.instance_id
         self.downstream_operator = None
         self.input_gate = None
         self.output_gate = None
+        self.source.init(self.instance_id)
 
     # Starts the source by calling get_next() repeatedly
     def run(self, input_gate, output_gate):

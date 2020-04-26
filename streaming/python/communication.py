@@ -40,13 +40,14 @@ class DataChannel:
     """
 
     def __init__(self, src_operator_id, src_instance_index, dst_operator_id,
-                 dst_instance_index, str_qid):
+                 dst_instance_index, str_qid, src_last_operator_id):
         self.src_operator_id = src_operator_id
         self.src_instance_index = src_instance_index
         self.dst_operator_id = dst_operator_id
         self.dst_instance_index = dst_instance_index
         self.str_qid = str_qid
         self.qid = ChannelID(str_qid)
+        self.src_last_operator_id = src_last_operator_id
 
     def __repr__(self):
         return "(src({},{}),dst({},{}), qid({}))".format(
@@ -83,6 +84,18 @@ class DataInput:
         self.max_index = len(channels)
         # Tracks the channels that have been closed. qid: close status
         self.closed = {}
+        self.is_join = False
+        self.from_which = {}
+
+    def set_join(self, operator):
+        self.is_join = True
+        for channel in self.input_channels:
+            if channel.src_last_operator_id == operator.left_operator_id:
+                self.from_which[channel.str_qid] = "left"
+            elif channel.src_last_operator_id == operator.right_operator_id:
+                self.from_which[channel.str_qid] = "right"
+            else:
+                logger.info("cannot match join operators!!")
 
     def init(self):
         channels = [c.str_qid for c in self.input_channels]
@@ -117,7 +130,13 @@ class DataInput:
         else:
             logger.info("recv record '{}' from {}".format(
                     pickle.loads(msg_data), item.channel_id()))
-            return pickle.loads(msg_data)
+            if self.is_join:
+                if self.from_which.get(item.channel_id()) is None:
+                    logger.info("unknown channel id!!!!")
+                else:
+                    return self.from_which[item.channel_id()], pickle.loads(msg_data)
+            else:
+                return pickle.loads(msg_data)
 
     def close(self):
         self.reader.stop()
@@ -254,14 +273,14 @@ class DataOutput:
             index += 1
         # Hash-based shuffling by key
         if self.shuffle_key_exists:
-            key, _ = record
+            key, value = record
             h = _hash(key)
             for channels in self.shuffle_key_channels:
                 num_instances = len(channels)  # Downstream instances
                 c = channels[h % num_instances]
                 logger.info(
                     "[key_shuffle] Push record '{}' to channel {}".format(
-                        record, c))
+                        value, c))
                 target_channels.append(c)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             h = _hash(record)
@@ -274,7 +293,10 @@ class DataOutput:
         else:  # TODO (john): Handle rescaling
             pass
 
-        msg_data = pickle.dumps(record)
+        if self.shuffle_key_exists:
+            msg_data = pickle.dumps(record[1])
+        else:
+            msg_data = pickle.dumps(record)
         for c in target_channels:
             # send data to channel
             self.writer.write(c.qid, msg_data)
