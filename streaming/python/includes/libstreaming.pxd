@@ -81,6 +81,7 @@ cdef extern from "message/message_bundle.h" namespace "ray::streaming" nogil:
     cdef CStreamingMessageBundleType BundleTypeEmpty "ray::streaming::StreamingMessageBundleType::Empty"
     cdef CStreamingMessageBundleType BundleTypeBarrier "ray::streaming::StreamingMessageBundleType::Barrier"
     cdef CStreamingMessageBundleType BundleTypeBundle "ray::streaming::StreamingMessageBundleType::Bundle"
+    cdef CStreamingMessageBundleType BundleTypeMigration "ray::streaming::StreamingMessageBundleType::Migration"
 
     cdef cppclass CStreamingMessageBundleMeta "ray::streaming::StreamingMessageBundleMeta":
         CStreamingMessageBundleMeta()
@@ -133,6 +134,9 @@ cdef extern from "data_reader.h" namespace "ray::streaming" nogil:
                                    shared_ptr[CDataBundle] &message)
         void Stop()
         void RemoveChannel(CObjectID q_id)
+        void SetStateful()
+        void StartMigration()
+        void EndMigration()
 
 
 cdef extern from "data_writer.h" namespace "ray::streaming" nogil:
@@ -147,6 +151,23 @@ cdef extern from "data_writer.h" namespace "ray::streaming" nogil:
         void Run()
         void Stop()
         float GetRatio(CObjectID q_id)
+        void SetMigrating(const CActorID &actor_id)
+        CStreamingStatus WriteMigrationMessage(const CActorID &actor_id, uint8_t *data, uint32_t data_size)
+
+cdef extern from "state_migrater.h" namespace "ray::streaming" nogil:
+    cdef cppclass CStateMigrater "ray::streaming::StateMigrater"(CStreamingCommon):
+        CStateMigrater(const CActorID &actor_id)
+        CStreamingStatus WriteMigrationMessage(const CActorID &actor_id, uint8_t *data, uint32_t data_size)
+
+cdef extern from "probe_writer.h" namespace "ray::streaming" nogil:
+    cdef cppclass CProbeWriter "ray::streaming::ProbeWriter"(CStreamingCommon):
+        CProbeWriter(const CActorID &scheduler_id)
+        CStreamingStatus WriteProbeMessage(uint8_t *data, uint32_t data_size)
+
+cdef extern from "flow_prober.h" namespace "ray::streaming" nogil:
+    cdef cppclass CFlowProber "ray::streaming::FlowProber"(CStreamingCommon):
+        CFlowProber()
+        CStreamingStatus Probe(uint8_t *&data, uint32_t &data_size)
 
 
 cdef extern from "ray/common/buffer.h" nogil:

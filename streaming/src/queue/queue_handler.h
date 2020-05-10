@@ -120,6 +120,7 @@ class UpstreamQueueMessageHandler : public QueueMessageHandler {
   std::shared_ptr<WriterQueue> CreateUpstreamQueue(const ObjectID &queue_id,
                                                    const ActorID &peer_actor_id,
                                                    uint64_t size);
+  std::shared_ptr<ray::streaming::Transport> CreateMigrateTransport(const ActorID &peer_actor_id);
   /// Check whether the upstream queue specified by queue_id exists or not.
   bool UpstreamQueueExists(const ObjectID &queue_id);
   /// Wait all queues in queue_ids vector ready, until timeout.

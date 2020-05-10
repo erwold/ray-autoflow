@@ -9,6 +9,8 @@ import ray.streaming.runtime.transfer as transfer
 from ray.streaming.config import Config
 from ray.streaming.operator import PStrategy
 from ray.streaming.runtime.transfer import ChannelID
+from ray.actor import ActorHandle, ActorID
+import ray.streaming.hash as hash
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +58,7 @@ class DataChannel:
 
 
 _CLOSE_FLAG = b" "
+_VIRTUAL_NUM = 10
 
 
 # Pulls and merges data from multiple input channels
@@ -86,6 +89,8 @@ class DataInput:
         self.closed = {}
         self.is_join = False
         self.from_which = {}
+        self.actor_id = None
+        self.num_input = len(channels)
 
     def set_join(self, operator):
         self.is_join = True
@@ -104,6 +109,12 @@ class DataInput:
             actor = self.env.execution_graph.get_actor(c.src_operator_id,
                                                        c.src_instance_index)
             input_actors.append(actor)
+        # get self actor id
+        c = self.input_channels[0]
+        actor: ActorHandle = self.env.execution_graph.get_actor(c.dst_operator_id,
+                                                           c.dst_instance_index)
+        self.actor_id: ActorID = actor._ray_actor_id
+        logger.info("my actor id {}".format(self.actor_id))
         logger.info("DataInput input_actors %s", input_actors)
         conf = {
             Config.TASK_JOB_ID: ray.runtime_context._get_runtime_context()
@@ -140,6 +151,15 @@ class DataInput:
 
     def close(self):
         self.reader.stop()
+
+    def set_stateful(self):
+        self.reader.set_stateful()
+
+    def start_migration(self):
+        self.reader.start_migration()
+
+    def end_migration(self):
+        self.reader.end_migration()
 
 
 # Selects output channel(s) and pushes data
@@ -223,6 +243,10 @@ class DataOutput:
                 sys.exit("Unrecognized or unsupported partitioning strategy.")
         # A KeyedDataStream can only be shuffled by key
         assert not (self.shuffle_exists and self.shuffle_key_exists)
+        self.actor_id = None
+        self.hash = None
+        self.output_actors = []
+        self.actor_to_queue = {}
 
     def init(self):
         """init DataOutput which creates DataWriter"""
@@ -232,7 +256,18 @@ class DataOutput:
             actor = self.env.execution_graph.get_actor(c.dst_operator_id,
                                                        c.dst_instance_index)
             to_actors.append(actor)
+            self.actor_to_queue[actor._ray_actor_id] = c.qid
+            self.output_actors.append(actor._ray_actor_id)
         logger.info("DataOutput output_actors %s", to_actors)
+
+        # get self actor id
+        c = self.channels[0]
+        actor: ActorHandle = self.env.execution_graph.get_actor(c.src_operator_id,
+                                                   c.src_instance_index)
+        self.actor_id: ActorID = actor._ray_actor_id
+        logger.info("my actor id {}".format(self.actor_id))
+        if self.shuffle_key_exists:
+            self.set_hash()
 
         conf = {
             Config.TASK_JOB_ID: ray.runtime_context._get_runtime_context()
@@ -240,6 +275,10 @@ class DataOutput:
             Config.CHANNEL_TYPE: self.env.config.channel_type
         }
         self.writer = transfer.DataWriter(channel_ids, to_actors, conf)
+
+    def set_hash(self):
+        logger.info("[LPQINFO] output_actors {}".format(self.output_actors))
+        self.hash = hash.Hash(self.output_actors, _VIRTUAL_NUM)
 
     def close(self):
         """Close the channel (True) by propagating _CLOSE_FLAG
@@ -273,15 +312,21 @@ class DataOutput:
             index += 1
         # Hash-based shuffling by key
         if self.shuffle_key_exists:
-            key, value = record
-            h = _hash(key)
-            for channels in self.shuffle_key_channels:
-                num_instances = len(channels)  # Downstream instances
-                c = channels[h % num_instances]
-                logger.info(
+            actor_id, value = record
+            # virtual_index, actor_id = self.hash.get(key)
+            # value["v_id"] = virtual_index
+            channel_id = self.actor_to_queue[actor_id]
+            logger.info(
                     "[key_shuffle] Push record '{}' to channel {}".format(
-                        value, c))
-                target_channels.append(c)
+                        value, channel_id))
+            # h = _hash(key)
+            # for channels in self.shuffle_key_channels:
+            #    num_instances = len(channels)  # Downstream instances
+            #    c = channels[h % num_instances]
+            #    logger.info(
+            #        "[key_shuffle] Push record '{}' to channel {}".format(
+            #            value, c))
+            #    target_channels.append(c)
         elif self.shuffle_exists:  # Hash-based shuffling per destination
             h = _hash(record)
             for channels in self.shuffle_channels:
@@ -294,12 +339,13 @@ class DataOutput:
             pass
 
         if self.shuffle_key_exists:
-            msg_data = pickle.dumps(record[1])
+            msg_data = pickle.dumps(value)
+            self.writer.write(channel_id, msg_data)
         else:
             msg_data = pickle.dumps(record)
-        for c in target_channels:
-            # send data to channel
-            self.writer.write(c.qid, msg_data)
+            for c in target_channels:
+                # send data to channel
+                self.writer.write(c.qid, msg_data)
 
     def push_all(self, records):
         for record in records:
@@ -323,3 +369,21 @@ class DataOutput:
                     record, str_qid))
             msg_data = pickle.dumps(record)
             self.writer.write(channel_id, msg_data)
+
+    def broadcast_marker(self, record):
+        #if self.shuffle_key_exists:
+        #    msg_data = pickle.dumps(record)
+        #    for channels in self.shuffle_key_channels:
+        #        for c in channels:
+        #            # send data to channel
+        #            self.writer.write(c.qid, msg_data)
+        msg_data = pickle.dumps(record)
+        for c in self.channels:
+            self.writer.write(c.qid, msg_data)
+
+    def set_migrate(self, actor_id):
+        self.writer.set_migrate(actor_id)
+
+    def write_migration(self, actor_id, record):
+        msg_data = pickle.dumps(record)
+        self.writer.write_migration(actor_id, msg_data)

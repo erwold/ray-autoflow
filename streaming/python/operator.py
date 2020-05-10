@@ -47,6 +47,10 @@ class OpType(enum.Enum):
     Join = 13
     EventTimeWindow = 14
     TimeWindowJoin = 15
+    Scheduler = 16
+    EventSource = 17
+    EventKeyBy = 18
+    EventReduce = 19
     # ...
 
 
@@ -77,7 +81,14 @@ class Operator:
         self.right_stream = right_stream   # For join operator
         self.left_operator_id = left_operator_id
         self.right_operator_id = right_operator_id
-        self.instance_id = None
+        # run time variables below
+        self.instance_id = None  # For source operator
+        self.num_input = None   # For EventKeyby operator
+        self.stateful_op = []   # For scheduler
+        self.migrater = None   # For stateful operator
+        self.actor_id = None
+        self.probe_writer = None
+        self.prober = None
 
     # Sets the partitioning scheme for an output stream of the operator
     def _set_partition_strategy(self,
@@ -118,6 +129,24 @@ class Operator:
     def set_instance_id(self, id):
         self.instance_id = id
 
+    def set_num_input(self, num_input):
+        self.num_input = num_input
+
+    def set_stateful_op(self, stateful_op):
+        self.stateful_op = stateful_op
+
+    def set_migrater(self, migrater):
+        self.migrater = migrater
+
+    def set_actor_id(self, actor_id):
+        self.actor_id = actor_id
+
+    def set_probe_writer(self, probe_writer):
+        self.probe_writer = probe_writer
+
+    def set_prober(self, prober):
+        self.prober = prober
+
     @property
     def logic(self):
         return cloudpickle.loads(self._logic)
@@ -135,15 +164,46 @@ class OperatorChain:
         self.is_join = True if (operator_list[0].name == "Join" or
                                 operator_list[0].name == "TimeWindowJoin") else False
         self.is_source = True if operator_list[0].name == "Source" else False
+        self.is_event_source = True if operator_list[0].name == "EventSource" else False
+        self.is_eventkeyby = True if operator_list[-1].name == "EventKeyBy" else False
+        self.is_stateful = True if operator_list[0].name == "EventReduce" else False
+        self.is_scheduler = True if operator_list[0].name == "Scheduler" else False
         self.type = "{"
         for operator in operator_list:
             self.type += " " + operator.name
         self.type += "}"
 
-    # only for source operator
+    # only for source and event_source operator
     def set_instance_id(self, id):
-        assert self.is_source is True
+        #assert self.is_source is True
         self.operator_list[0].set_instance_id(id)
+
+    # only for event key by
+    def set_num_input(self, num_input):
+        assert self.is_eventkeyby is True
+        self.operator_list[-1].set_num_input(num_input)
+
+    # only for scheduler
+    def set_stateful_op(self, stateful_op):
+        assert self.is_scheduler is True
+        self.operator_list[0].set_stateful_op(stateful_op)
+
+    # only for stateful operators
+    def set_migrater(self, migrater):
+        assert self.is_stateful is True
+        self.operator_list[0].set_migrater(migrater)
+
+    def set_actor_id(self, actor_id):
+        assert self.is_stateful is True
+        self.operator_list[0].set_actor_id(actor_id)
+
+    def set_probe_writer(self, probe_writer):
+        assert self.is_stateful is True
+        self.operator_list[0].set_probe_writer(probe_writer)
+
+    def set_prober(self, prober):
+        assert self.is_scheduler is True
+        self.operator_list[0].set_prober(prober)
 
     def init(self, input_gate, output_gate):
         next_processor = None

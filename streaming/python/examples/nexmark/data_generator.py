@@ -108,13 +108,36 @@ class NexmarkEventGenerator(object):
             return None  # Exhausted
         event = self.events.pop(0)
         self.total_count += 1
-        self.__wait()  # Wait if needed
+        #self.__wait()  # Wait if needed
         self.count += 1
         if self.count == self.period:
             self.count = 0
             # Assign the generation timestamp
             event["system_time"] = time.time()
+        else:
+            event["system_time"] = None
         return event
+
+    def can_get_next(self, event_time):
+        if len(self.events) > 0:
+            if self.events[0]["dateTime"] <= event_time:
+                return True
+        return False
+
+    def get_batch_before(self, event_time):
+        batch = []
+        if (not self.events) or (self.total_count == self.max_records):
+            return None  # Exhausted
+        while self.events[0]["dateTime"] <= event_time:
+            event = self.events.pop(0)
+            self.total_count += 1
+            self.count += 1
+            if self.count == self.period:
+                self.count = 0
+                # Assign the generation timestamp
+                event["system_time"] = time.time()
+            batch.append(event)
+        return batch
 
     # Drains the source as fast as possible
     def drain(self):
@@ -127,17 +150,33 @@ class NexmarkEventGenerator(object):
 # A custom sink used to measure processing latency
 class LatencySink(object):
     def __init__(self):
-        self.state = []
+        self.latencies = []
+        self.throughputs = []
+        self.last_time = None
+        self.num_records = 0
+        self.is_first = False
 
     # Evicts next record
     def evict(self, record):
         # if record["event_type"] == "Watermark":
         #    return  # Ignore watermarks
+        if self.is_first is False:
+            self.is_first = True
+            self.last_time = time.time()
+
+        self.num_records = self.num_records + 1
+        if self.num_records == 1000:
+            now_time = time.time()
+            throughput = self.num_records / (now_time - self.last_time)
+            self.throughputs.append(throughput)
+            self.last_time = now_time
+            self.num_records = 0
+
         generation_time = record["system_time"]
         if generation_time is not None:
             # TODO (john): Clock skew might distort elapsed time
             latency = time.time() - generation_time
-            self.state.append(latency)
+            self.latencies.append(latency)
             return latency
         return None
 

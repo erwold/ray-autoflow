@@ -135,6 +135,25 @@ Status StreamingQueueProducer::PushQueueItem(uint64_t seq_id, uint8_t *data,
   return status;
 }
 
+StreamingStatus StreamingMigrateChannel::ProduceItemToChannel(const ActorID &peer_actor_id, 
+                                            uint8_t *data, uint32_t data_size) {
+    auto it = transports_.find(peer_actor_id);
+    if (it == transports_.end()) {
+        STREAMING_LOG(INFO) << "Initialize Transport for " << peer_actor_id;
+        auto upstream_handler = ray::streaming::UpstreamQueueMessageHandler::GetService();
+        std::shared_ptr<ray::streaming::Transport> transport = 
+                                        upstream_handler->CreateMigrateTransport(peer_actor_id);
+        transports_[peer_actor_id] = transport;
+        actor_seq_id_[peer_actor_id] = 1;
+    }
+    std::shared_ptr<LocalMemoryBuffer> buffer = std::make_shared<LocalMemoryBuffer>(data, data_size, true);
+    DataMessage msg(actor_id_, peer_actor_id, queue_id_, actor_seq_id_[peer_actor_id], buffer, true);
+    std::unique_ptr<LocalMemoryBuffer> msg_buffer = msg.ToBytes();
+    transports_[peer_actor_id]->Send(std::move(msg_buffer), DownstreamQueueMessageHandler::peer_async_function_);
+    actor_seq_id_[peer_actor_id]++;
+    return StreamingStatus::OK;
+}
+
 StreamingQueueConsumer::StreamingQueueConsumer(std::shared_ptr<Config> &transfer_config,
                                                ConsumerChannelInfo &c_channel_info)
     : ConsumerChannel(transfer_config, c_channel_info) {
@@ -214,6 +233,88 @@ bool StreamingQueueConsumer::hasChannelData() {
                        << " hasChannelData " << !is_queue_empty;
   return !is_queue_empty;
 }
+
+StreamingQueueProber::StreamingQueueProber(std::shared_ptr<Config> &transfer_config,
+                                               ConsumerChannelInfo &c_channel_info)
+    : ConsumerChannel(transfer_config, c_channel_info) {
+  STREAMING_LOG(INFO) << "Consumer Init";
+}
+
+StreamingQueueProber::~StreamingQueueProber() {
+  STREAMING_LOG(INFO) << "Consumer Destroy";
+}
+
+StreamingStatus StreamingQueueProber::CreateTransferChannel() {
+  auto downstream_handler = ray::streaming::DownstreamQueueMessageHandler::GetService();
+  STREAMING_LOG(INFO) << "GetQueue qid: " << channel_info_.channel_id
+                      << " start_seq_id: " << channel_info_.current_seq_id + 1;
+  if (downstream_handler->DownstreamQueueExists(channel_info_.channel_id)) {
+    RAY_LOG(INFO) << "StreamingQueueReader::GetQueue duplicate!!!";
+    return StreamingStatus::OK;
+  }
+
+  downstream_handler->SetPeerActorID(channel_info_.channel_id, channel_info_.actor_id);
+  STREAMING_LOG(INFO) << "Create ReaderQueue " << channel_info_.channel_id
+                      << " pull from start_seq_id: " << channel_info_.current_seq_id + 1;
+  queue_ = downstream_handler->CreateDownstreamQueue(channel_info_.channel_id,
+                                                     channel_info_.actor_id);
+  queue_->OmitExpected();
+
+  return StreamingStatus::OK;
+}
+
+StreamingStatus StreamingQueueProber::DestroyTransferChannel() {
+  return StreamingStatus::OK;
+}
+
+StreamingStatus StreamingQueueProber::ClearTransferCheckpoint(
+    uint64_t checkpoint_id, uint64_t checkpoint_offset) {
+  return StreamingStatus::OK;
+}
+
+StreamingStatus StreamingQueueProber::RefreshChannelInfo() {
+  channel_info_.queue_info.last_seq_id = queue_->GetLastRecvSeqId();
+  return StreamingStatus::OK;
+}
+
+StreamingStatus StreamingQueueProber::ConsumeItemFromChannel(uint64_t &offset_id,
+                                                               uint8_t *&data,
+                                                               uint32_t &data_size,
+                                                               uint32_t timeout) {
+  STREAMING_LOG(INFO) << "GetQueueItem qid: " << channel_info_.channel_id;
+  STREAMING_CHECK(queue_ != nullptr);
+  QueueItem item = queue_->PopPendingBlockTimeout(timeout * 1000);
+  if (item.SeqId() == QUEUE_INVALID_SEQ_ID) {
+    STREAMING_LOG(INFO) << "GetQueueItem timeout.";
+    data = nullptr;
+    data_size = 0;
+    offset_id = QUEUE_INVALID_SEQ_ID;
+    return StreamingStatus::OK;
+  }
+
+  data = item.Buffer()->Data();
+  offset_id = item.SeqId();
+  data_size = item.Buffer()->Size();
+
+  STREAMING_LOG(DEBUG) << "GetQueueItem qid: " << channel_info_.channel_id
+                       << " seq_id: " << offset_id << " msg_id: " << item.MaxMsgId()
+                       << " data_size: " << data_size;
+  return StreamingStatus::OK;
+}
+
+StreamingStatus StreamingQueueProber::NotifyChannelConsumed(uint64_t offset_id) {
+  STREAMING_CHECK(queue_ != nullptr);
+  queue_->OnConsumed(offset_id);
+  return StreamingStatus::OK;
+}
+
+bool StreamingQueueProber::hasChannelData() {
+  bool is_queue_empty = queue_->IsPendingEmpty();
+  STREAMING_LOG(DEBUG) << "[LPQ] qid: " << queue_->QueueId()
+                       << " hasChannelData " << !is_queue_empty;
+  return !is_queue_empty;
+}
+
 
 // For mock queue transfer
 struct MockQueueItem {

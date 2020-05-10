@@ -60,7 +60,7 @@ void DataReader::Init(const std::vector<ObjectID> &input_ids,
        [](const ObjectID &a, const ObjectID &b) { return a.Hash() < b.Hash(); });
   std::copy(input_ids.begin(), input_ids.end(), std::back_inserter(unready_queue_ids_));
   InitChannel();
-  statistic_thread_ = std::make_shared<std::thread>(&DataReader::StatisticTimer, this);
+  is_migrating_ = false;
 }
 
 void DataReader::RemoveChannel(ObjectID q_id) {
@@ -68,6 +68,21 @@ void DataReader::RemoveChannel(ObjectID q_id) {
                     input_queue_ids_.end(), q_id), input_queue_ids_.end());
     is_removing_channel_ = true;
     STREAMING_LOG(DEBUG) << "[LPQ] Remove Channel " << q_id;
+}
+
+void DataReader::SetStateful() {
+    is_migrating_ = false;
+    InitMigrateChannel();
+}
+
+void DataReader::StartMigration() {
+    STREAMING_LOG(INFO) << "Start Migration ";
+    is_migrating_ = true;
+}
+
+void DataReader::EndMigration() {
+    STREAMING_LOG(INFO) << "End Migration ";
+    is_migrating_ = false;
 }
 
 StreamingStatus DataReader::InitChannel() {
@@ -90,11 +105,32 @@ StreamingStatus DataReader::InitChannel() {
       STREAMING_LOG(ERROR) << "Initialize queue failed, id => " << input_channel;
     }
   }
+
   runtime_context_->SetRuntimeStatus(RuntimeStatus::Running);
   STREAMING_LOG(INFO) << "[Reader] Reader construction done!";
   return StreamingStatus::OK;
 }
 
+StreamingStatus DataReader::InitMigrateChannel() {
+   // init migration channel
+  STREAMING_LOG(INFO) << "[LPQINFO] Start Initialize migration channel ";
+  migrate_channel_info_.channel_id = ObjectID::FromBinary("migrate_channel12345");
+  migrate_channel_info_.actor_id = ActorID::FromBinary("migrat");
+  migrate_channel_info_.last_queue_item_delay = 0;
+  migrate_channel_info_.last_queue_item_latency = 0;
+  migrate_channel_info_.last_queue_target_diff = 0;
+  migrate_channel_info_.get_queue_item_times = 0;
+  migrate_channel_ = std::make_shared<StreamingQueueConsumer>(transfer_config_, 
+                                                    migrate_channel_info_);
+  migrate_channel_->CreateTransferChannel();
+  STREAMING_LOG(INFO) << "[LPQINFO] Initialize migration channel "
+                      << migrate_channel_info_.channel_id 
+                      << " actor_id " << migrate_channel_info_.actor_id;
+
+  return StreamingStatus::OK; 
+}
+
+/*
 void DataReader::StatisticTimer() {
     std::chrono::milliseconds MockTimer(1000);
     while(true) {
@@ -122,7 +158,7 @@ void DataReader::StatisticTimer() {
                                  << " num records processed: " << channel_info.processed_msg_cnt;
         }
     }
-}
+}*/
 
 StreamingStatus DataReader::InitChannelMerger() {
   STREAMING_LOG(INFO) << "[Reader] Initializing queue merger.";
@@ -196,8 +232,44 @@ StreamingStatus DataReader::StashNextMessage(std::shared_ptr<DataBundle> &messag
   return StreamingStatus::OK;
 }
 
+StreamingStatus DataReader::GetMessageFromMigration(std::shared_ptr<DataBundle> &message) {
+  //while (RuntimeStatus::Running == runtime_context_->GetRuntimeStatus() &&
+  //       !message->data) {
+    message = std::make_shared<DataBundle>();
+    STREAMING_LOG(INFO) << "[LPQINFO] start get message from migration ";
+    auto status = migrate_channel_->ConsumeItemFromChannel(
+        message->seq_id, message->data, message->data_size, kReadItemTimeout);
+    migrate_channel_info_.get_queue_item_times++;
+    if (!message->data) {
+      STREAMING_LOG(INFO) << "[LPQINFO] read migration channel status " << status
+                           << " get item timeout ";
+      return StreamingStatus::GetBundleTimeOut;
+    }
+  //}
+  //if (RuntimeStatus::Interrupted == runtime_context_->GetRuntimeStatus()) {
+  //  return StreamingStatus::Interrupted;
+  //}
+  //STREAMING_LOG(DEBUG) << "[Reader] recevied queue seq id => " << message->seq_id
+  //                     << ", queue id => " << qid;
+
+  //message->from = qid;
+  //message->meta = StreamingMessageBundleMeta::FromBytes(message->data);
+  message->meta = std::make_shared<StreamingMessageBundleMeta>(0, 0, 0, 
+                                StreamingMessageBundleType::Migration);
+  return StreamingStatus::OK;
+}
+
 StreamingStatus DataReader::GetMergedMessageBundle(std::shared_ptr<DataBundle> &message,
                                                    bool &is_valid_break) {
+  // TODO: perform state migration
+  if (is_migrating_) {
+    auto status = GetMessageFromMigration(message);
+    if (status == StreamingStatus::OK) {
+        is_valid_break = true;
+        return status;
+    }
+  }
+
   int64_t cur_time = current_time_ms();
   if (last_fetched_queue_item_) {
     if (is_removing_channel_) {
@@ -330,10 +402,6 @@ DataReader::DataReader(std::shared_ptr<RuntimeContext> &runtime_context)
     : transfer_config_(new Config()), runtime_context_(runtime_context) {}
 
 DataReader::~DataReader() { 
-    if (statistic_thread_->joinable()) {
-        STREAMING_LOG(INFO) << "Statistic timer thread waiting for join"; 
-        statistic_thread_->join();
-    }
     STREAMING_LOG(INFO) << "Streaming reader deconstruct."; 
 }
 

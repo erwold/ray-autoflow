@@ -3,6 +3,7 @@ import sys
 import time
 import types
 import math
+from collections import defaultdict
 from ray.streaming.communication import _hash
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,10 @@ class Map:
                 return self.downstream_operator.process(record)
             else:
                 return False
-        record = self.map_fn(record)
+
+        if record["event_type"] != "EventMarker":
+            record = self.map_fn(record)
+            record["event_type"] = "Bid"
 
         if self.downstream_operator:
             self.downstream_operator.process(record)
@@ -223,13 +227,14 @@ class Sink:
         if self.input_gate:
             record = self.input_gate.pull()
         if record is None:
-            if self.downstream_operator:
-                return self.downstream_operator.process(record)
-            else:
-                return False
+            logger.info("Throughput: {}".format(self.sink.throughputs))
+            logger.info("Latency: {}".format(self.sink.latencies))
+            return False
+
         result = self.sink.evict(record)
-        if result is not None:
-            print("latency: {}".format(result))
+        #if result is not None:
+        #    print("latency: {}".format(result))
+
         # if self.downstream_operator:
         #    self.downstream_operator.process(record)
         # elif self.output_gate:
@@ -728,6 +733,343 @@ class Join:
             self.output_gate.push_all(records)
         return True
 
+class Scheduler:
+    """Scheduler is a single operator that flow control
+       All the other operators. It cannot be chained"""
+
+    def __init__(self, operator):
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+        self.event_time = operator.other_args[0]
+        self.end_time = operator.other_args[1]
+        self.time_step = operator.other_args[2]
+        self.closed = False
+        self.stateful_op = operator.stateful_op
+        # todo: currently support one-stage stateful op
+        self.num_input = len(self.stateful_op)
+        self.marker = {}
+        self.buffer_record = {}
+        self.is_probe = False
+        self.prober = operator.prober
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.output_gate = output_gate
+
+    def process(self, record):
+        if self.closed and self.is_probe:
+            return False
+        #if self.closed:
+            #return False
+
+        self.event_time = self.event_time + self.time_step
+        if self.event_time > self.end_time:
+            self.closed = True
+
+        marker = {
+            "event_type": "EventMarker",
+            "event_time": self.event_time,
+            "migration": None,
+        }
+
+        probe_msg = self.prober.probe()
+        if probe_msg is not None:
+            self.receive_probe(probe_msg, marker)
+            self.is_probe = True
+
+        #logger.info("marker send {}".format(marker))
+        if self.closed is False:
+            self.output_gate.broadcast_marker(marker)
+            logger.info("marker send {}".format(marker))
+        return True
+
+    def receive_probe(self, record, marker):
+        # field: sender, event_time
+        logger.info("scheduler recv probe {}".format(record))
+
+        event_time = record["event_time"]
+        if self.marker.get(event_time) is None:
+            self.marker[event_time] = 1
+            self.buffer_record[event_time] = []
+        else:
+            self.marker[event_time] += 1
+        self.buffer_record[event_time].append(record)
+        if self.marker[event_time] == self.num_input:
+            self.process_probe(event_time, marker)
+
+    def process_probe(self, event_time, marker):
+        # find max and min
+        max_probe = max(self.buffer_record[event_time], key=lambda x: x["throughput"])
+        min_probe = min(self.buffer_record[event_time], key=lambda x: x["throughput"])
+
+        diff = max_probe["throughput"] - min_probe["throughput"]
+
+        migrate_state = []
+        if (diff / max_probe["throughput"]) > 0.99:
+            # perform state migration
+            while diff > 0:
+                max_process = max(zip(max_probe["process"].values(),
+                                      max_probe["process"].keys()))
+                migrate_state.append(max_process[1])
+                diff = diff - max_process[0]
+                max_probe["process"].pop(max_process[1])
+
+        if len(migrate_state) > 0:
+            marker["migration"] = 1
+            marker["sender"] = max_probe["sender"]
+            marker["receiver"] = min_probe["sender"]
+            marker["v_id"] = migrate_state
+
+        self.buffer_record.pop(event_time)
+        self.marker.pop(event_time)
+
+
+class EventKeyBy:
+    """A key_by operator instance that physically partitions the
+    stream based on a key.
+    """
+    def __init__(self, operator):
+        # Set the key selector
+        self.key_selector = operator.other_args
+        if isinstance(self.key_selector, int):
+            self._key_selector = lambda r: r[self.key_selector]
+        elif isinstance(self.key_selector, str):
+            # self._key_selector = lambda record: vars(record)[self.key_selector]
+            self._key_selector = lambda record: record[self.key_selector]
+        elif not isinstance(self.key_selector, types.FunctionType):
+            sys.exit("Unrecognized or unsupported key selector.")
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+        self.marker = {}
+        self.num_input = operator.num_input
+        self.partial_state = []
+        self.buffer_record = {}
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def process(self, record):
+        if self.input_gate:
+            record = self.input_gate.pull()
+        if record is None:
+            if self.downstream_operator:
+                return self.downstream_operator.process(record)
+            else:
+                return False
+
+        logger.info("record {}".format(record))
+        if record["event_type"] == "EventMarker":
+            event_time = record["event_time"]
+            if self.marker.get(event_time) is None:
+                self.marker[event_time] = 1
+                if record["migration"] is not None:
+                    v_ids = record["v_id"]
+                    for v_id in v_ids:
+                        self.partial_state.append(v_id)
+                        self.buffer_record[v_id] = []
+            else:
+                self.marker[event_time] += 1
+            if self.marker[event_time] == self.num_input:
+                if record["migration"] is not None:
+                    # change the routing table
+                    # and flush buffer record
+                    v_ids = record["v_id"]
+                    for v_id in v_ids:
+                        self.output_gate.hash.set(
+                            v_id, record["receiver"])
+                        self.flush(v_id, record["receiver"])
+                self.output_gate.broadcast_marker(record)
+                self.marker.pop(event_time)
+            return True
+        else:
+            key = self._key_selector(record)
+            v_id, actor_id = self.output_gate.hash.get(key)
+            if v_id in self.partial_state:
+                self.buffer_record[v_id].append(record)
+                return True
+
+            record["v_id"] = v_id
+
+            if self.downstream_operator:
+                self.downstream_operator.process((actor_id, record))
+            else:
+                self.output_gate.push((actor_id, record))
+            return True
+
+    def flush(self, v_id, actor_id):
+        for record in self.buffer_record[v_id]:
+            record["v_id"] = v_id
+            self.output_gate.push((actor_id, record))
+        self.buffer_record.pop(v_id)
+        self.partial_state.remove(v_id)
+
+
+class EventReduce:
+    """A reduce operator instance that combines a new value for a key
+    with the last reduced one according to a user-defined logic.
+    """
+
+    def __init__(self, operator):
+        self.reduce_fn = operator.logic
+        self.state = {}  # key -> value
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+        # for state migration
+        self.marker = {}
+        self.migrater = operator.migrater
+        self.actor_id = operator.actor_id
+        self.partial_state = []
+        self.buffer_record = {}
+        # for probe
+        self.probe_writer = operator.probe_writer
+        self.process_num = defaultdict(int)
+        self.throughput = 0
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def process(self, record):
+        if self.input_gate:
+            record = self.input_gate.pull()
+        if record is None:
+            if self.downstream_operator:
+                return self.downstream_operator.process(record)
+            else:
+                return False
+
+        if record["event_type"] == "EventMarker":
+            # todo: stateless->keyby->reduce->keyby->stateful
+            event_time = record["event_time"]
+            if self.marker.get(event_time) is None:
+                self.marker[event_time] = 1
+                if (record["migration"] is not None) \
+                        and (record["receiver"] == self.actor_id):
+                    v_ids = record["v_id"]
+                    for v_id in v_ids:
+                        self.partial_state.append(v_id)
+                        self.buffer_record[v_id] = []
+            else:
+                self.marker[event_time] += 1
+            if self.marker[event_time] == self.input_gate.num_input:
+                if record["migration"] is not None:
+                    if record["sender"] == self.actor_id:
+                        v_ids = record["v_id"]
+                        for v_id in v_ids:
+                            data = {
+                                "event_type": "Migration",
+                                "sender": self.actor_id,
+                                "v_id": v_id,
+                                "data": self.state[v_id]
+                            }
+                            self.state.pop(v_id)
+                            logger.info("actor {} send migration data {}".format(self.actor_id, data))
+                            self.migrater.write_migration(record["receiver"], data)
+                    elif record["receiver"] == self.actor_id:
+                        self.input_gate.start_migration()
+
+                self.write_probe(event_time)
+                self.marker.pop(event_time)
+                # self.output_gate.broadcast(record)
+            return True
+        elif record["event_type"] == "Migration":
+            logger.info("actor {} receive migration data {}".
+                        format(self.actor_id, record))
+            self.state[record["v_id"]] = record["data"]
+            self.merge(record["v_id"])
+            self.input_gate.end_migration()
+            return True
+        else:
+            v_id = record["v_id"]
+            if self.state.get(v_id) is None:
+                if v_id in self.partial_state:
+                    self.buffer_record[v_id].append(record)
+                    return True
+                else:
+                    self.state[v_id] = {}
+
+            result = self.reduce_fn(self.state[v_id], record)
+            self.process_num[v_id] = self.process_num[v_id] + 1
+            self.throughput = self.throughput + 1
+            if self.downstream_operator:
+                self.downstream_operator.process(result)
+            else:
+                self.output_gate.push(result)
+            return True
+
+    # Merge migrated state and record
+    def merge(self, v_id):
+        for record in self.buffer_record[v_id]:
+            result = self.reduce_fn(self.state[v_id], record)
+            self.process_num[v_id] = self.process_num[v_id] + 1
+            self.throughput = self.throughput + 1
+
+            if self.downstream_operator:
+                self.downstream_operator.process(result)
+            else:
+                self.output_gate.push(result)
+
+        self.buffer_record.pop(v_id)
+        self.partial_state.remove(v_id)
+
+    def write_probe(self, event_time):
+        record = {
+            "sender": self.actor_id,
+            "event_time": event_time,
+            "throughput": self.throughput,
+            "process": self.process_num,
+        }
+        self.probe_writer.write_probe(record)
+        self.process_num.clear()
+        self.throughput = 0
+
+    # Returns the state of the actor
+    def get_state(self):
+        return self.state
+
+
+# A special source actor cooperated with Scheduler
+class EventSource:
+    def __init__(self, operator):
+        # The user-defined source with a get_next() method
+        self.source = operator.logic
+        self.instance_id = operator.instance_id
+        self.downstream_operator = None
+        self.input_gate = None
+        self.output_gate = None
+        self.source.init(self.instance_id)
+        self.marker = None
+
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
+        self.downstream_operator = downstream_operator
+        self.input_gate = input_gate
+        self.output_gate = output_gate
+
+    def process(self, record):
+        if self.marker is None:
+            self.marker = self.input_gate.pull()
+            if self.marker is None:
+                return False
+        else:
+            if self.source.can_get_next(self.marker["event_time"]):
+                record = self.source.get_next()
+                # if not record:
+                #    return False
+                if self.downstream_operator:
+                    return self.downstream_operator.process(record)
+                else:
+                    self.output_gate.push(record)
+            else:
+                self.output_gate.broadcast_marker(self.marker)
+                self.marker = None
+        return True
+
 # A custom source actor
 class Source:
     def __init__(self, operator):
@@ -752,7 +1094,7 @@ class Source:
             output_gate.push(record)
             elements += 1
 
-    def set_chaining(self, downstream_operator, inputgate, output_gate):
+    def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
         self.output_gate = output_gate
 

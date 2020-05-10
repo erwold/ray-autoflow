@@ -36,6 +36,9 @@ from ray.streaming.includes.libstreaming cimport (
     CDataBundle,
     CDataWriter,
     CDataReader,
+    CStateMigrater,
+    CProbeWriter,
+    CFlowProber,
     CReaderClient,
     CWriterClient,
     CLocalMemoryBuffer,
@@ -201,6 +204,18 @@ cdef class DataWriter:
             msg_id = self.writer.WriteMessageToBufferRing(native_id, data, size)
         return msg_id
 
+    def write_migration(self, actor_id: ActorID, const unsigned char[:] value):
+        cdef:
+            CActorID peer_actor_id = (<ActorID>actor_id).data
+            uint8_t *data = <uint8_t *>(&value[0])
+            uint32_t size = value.nbytes
+        self.writer.WriteMigrationMessage(peer_actor_id, data, size)  
+
+    def set_migrate(self, actor_id: ActorID):
+        cdef:
+            CActorID my_actor_id = (<ActorID>actor_id).data
+        self.writer.SetMigrating(my_actor_id)
+
     def stop(self):
         self.writer.Stop()
         channel_logger.info("stopped DataWriter")
@@ -215,6 +230,79 @@ cdef class DataWriter:
         queue_id = CObjectID.FromBinary(q_id_data)
         ratio = self.writer.GetRatio(queue_id)
         return ratio
+
+
+cdef class StateMigrater:
+    cdef:
+        CStateMigrater *migrater
+
+    def __init__(self):
+        raise Exception("use create() to create DataReader")
+
+    @staticmethod
+    def create(actor_id: ActorID):
+        cdef:
+            CStateMigrater *c_migrater
+            CActorID my_actor_id = (<ActorID>actor_id).data
+        c_migrater = new CStateMigrater(my_actor_id) 
+        cdef StateMigrater migrater = StateMigrater.__new__(StateMigrater)
+        migrater.migrater = c_migrater
+        return migrater
+
+    def write_migration(self, actor_id: ActorID, const unsigned char[:] value):
+        cdef:
+            CActorID peer_actor_id = (<ActorID>actor_id).data
+            uint8_t *data = <uint8_t *>(&value[0])
+            uint32_t size = value.nbytes
+        self.migrater.WriteMigrationMessage(peer_actor_id, data, size)  
+
+
+cdef class ProbeWriter:
+    cdef:
+        CProbeWriter *writer
+
+    def __init__(self):
+        raise Exception("use create() to create DataReader")
+
+    @staticmethod
+    def create(scheduler_id: ActorID):
+        cdef:
+            CProbeWriter *c_writer
+            CActorID sche_id = (<ActorID>scheduler_id).data
+        c_writer = new CProbeWriter(sche_id)
+        cdef ProbeWriter writer = ProbeWriter.__new__(ProbeWriter)
+        writer.writer = c_writer
+        return writer
+
+    def write_probe(self, const unsigned char[:] value):
+        cdef:
+            uint8_t *data = <uint8_t *>(&value[0])
+            uint32_t size = value.nbytes
+        self.writer.WriteProbeMessage(data, size)
+
+
+cdef class FlowProber:
+    cdef:
+        CFlowProber *prober
+
+    def __init__(self):
+        raise Exception("use create() to create DataReader")
+
+    @staticmethod
+    def create():
+        cdef:
+            CFlowProber *c_prober
+        c_prober = new CFlowProber()
+        cdef FlowProber prober = FlowProber.__new__(FlowProber)
+        prober.prober = c_prober
+        return prober
+
+    def probe(self):
+        cdef:
+            uint8_t *data = NULL
+            uint32_t size = 0
+        self.prober.Probe(data, size)
+        return data[:size]
 
 
 cdef class DataReader:
@@ -306,6 +394,14 @@ cdef class DataReader:
                 msg_id = msg.get().GetMessageSeqId()
                 msgs.append((msg_bytes, msg_id, timestamp, qid_bytes))
             return msgs
+        elif  bundle_type == <uint32_t> libstreaming.BundleTypeMigration:
+            msg_bytes = bundle.get().data[:bundle.get().data_size]
+            timestamp = bundle.get().meta.get().GetMessageBundleTs()
+            queue_id = bundle.get().c_from
+            qid_bytes = queue_id.Binary()
+            msg_id = 1
+            msgs.append((msg_bytes, msg_id, timestamp, qid_bytes))
+            return msgs
         elif  bundle_type == <uint32_t> libstreaming.BundleTypeEmpty:
             return []
         else:
@@ -323,6 +419,15 @@ cdef class DataReader:
         assert q_id_data.size() == CObjectID.Size()
         queue_id = CObjectID.FromBinary(q_id_data)
         self.reader.RemoveChannel(queue_id)
+
+    def set_stateful(self):
+        self.reader.SetStateful()
+
+    def start_migration(self):
+        self.reader.StartMigration()
+
+    def end_migration(self):
+        self.reader.EndMigration()
 
 cdef c_vector[CObjectID] bytes_list_to_qid_vec(list py_queue_ids) except *:
     assert len(py_queue_ids) > 0

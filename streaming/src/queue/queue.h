@@ -182,7 +182,8 @@ class ReaderQueue : public Queue {
         min_consumed_id_(QUEUE_INVALID_SEQ_ID),
         last_recv_seq_id_(QUEUE_INVALID_SEQ_ID),
         expect_seq_id_(1),
-        transport_(transport) {}
+        transport_(transport),
+        is_omit_expected_(false) {}
 
   /// Delete processed items whose seq id <= seq_id,
   /// then notify upstream queue.
@@ -196,6 +197,8 @@ class ReaderQueue : public Queue {
 
   void SetExpectSeqId(uint64_t expect) { expect_seq_id_ = expect; }
 
+  void OmitExpected() { is_omit_expected_ = true; }
+
  private:
   void Notify(uint64_t seq_id);
   void CreateNotifyTask(uint64_t seq_id, std::vector<TaskArg> &task_args);
@@ -208,6 +211,7 @@ class ReaderQueue : public Queue {
   uint64_t expect_seq_id_;
   std::shared_ptr<PromiseWrapper> promise_for_pull_;
   std::shared_ptr<Transport> transport_;
+  bool is_omit_expected_;
 };
 
 }  // namespace streaming

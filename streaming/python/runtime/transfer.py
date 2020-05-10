@@ -1,5 +1,6 @@
 import logging
 import random
+import pickle
 from queue import Queue
 from typing import List
 
@@ -199,6 +200,45 @@ class DataWriter:
     def get_ratio(self, q_id):
         return self.writer.get_ratio(channel_id_str_to_bytes(q_id))
 
+    def set_migrate(self, actor_id: ActorID):
+        self.writer.set_migrate(actor_id)
+
+    def write_migration(self, actor_id: ActorID, item: bytes):
+        assert type(item) == bytes
+        self.writer.write_migration(actor_id, item)
+
+class StateMigrater:
+    def __init__(self, actor_id: ActorID):
+        self.migrater = _streaming.StateMigrater.create(actor_id)
+        logger.info("create StateMigrater succeed")
+
+    def write_migration(self, actor_id: ActorID, record):
+        item = pickle.dumps(record)
+        assert type(item) == bytes
+        self.migrater.write_migration(actor_id, item)
+
+class ProbeWriter:
+    def __init__(self, actor_id: ActorID):
+        self.writer = _streaming.ProbeWriter.create(actor_id)
+        logger.info("create ProbeWriter succeed")
+
+    def write_probe(self, record):
+        item = pickle.dumps(record)
+        assert type(item) == bytes
+        self.writer.write_probe(item)
+
+class FlowProber:
+    def __init__(self):
+        self.prober = _streaming.FlowProber.create()
+        logger.info("create FlowProber succeed")
+
+    def probe(self):
+        probe_data = self.prober.probe()
+        if probe_data != b'':
+            #logger.info("probe data {}".format(probe_data))
+            return pickle.loads(probe_data)
+        else:
+            return None
 
 class DataReader:
     """Data Reader is wrapper of streaming c++ DataReader, which read data
@@ -264,6 +304,15 @@ class DataReader:
     
     def close_channel(self, channel_id):
         self.reader.close(channel_id_str_to_bytes(channel_id))
+
+    def set_stateful(self):
+        self.reader.set_stateful()
+
+    def start_migration(self):
+        self.reader.start_migration()
+
+    def end_migration(self):
+        self.reader.end_migration()
 
 def _to_native_conf(conf):
     config = streaming_pb.StreamingConfig()

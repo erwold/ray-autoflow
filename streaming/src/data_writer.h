@@ -66,6 +66,10 @@ class DataWriter {
   void GetOffsetInfo(std::unordered_map<ObjectID, ProducerChannelInfo> *&offset_map);
 
   float GetRatio(ObjectID q_id);
+
+  void SetMigrating(const ActorID &actor_id);
+  StreamingStatus WriteMigrationMessage(
+    const ActorID &actor_id, uint8_t *data, uint32_t data_size);
  private:
   bool IsMessageAvailableInBuffer(ProducerChannelInfo &channel_info);
 
@@ -113,7 +117,6 @@ class DataWriter {
 
   void FlowControlTimer();
 
-  void StatisticTimer();
  private:
   std::shared_ptr<EventService> event_service_;
 
@@ -121,7 +124,6 @@ class DataWriter {
 
   std::shared_ptr<std::thread> flow_control_thread_;
 
-  std::shared_ptr<std::thread> statistic_thread_;
   // One channel have unique identity.
   std::vector<ObjectID> output_queue_ids_;
   // Flow controller makes a decision when it's should be blocked and avoid
@@ -135,6 +137,7 @@ class DataWriter {
   std::unordered_map<ObjectID, std::shared_ptr<ProducerChannel>> channel_map_;
   std::shared_ptr<Config> transfer_config_;
   std::shared_ptr<RuntimeContext> runtime_context_;
+  std::shared_ptr<StreamingMigrateChannel> migrate_channel_;
 };
 }  // namespace streaming
 }  // namespace ray

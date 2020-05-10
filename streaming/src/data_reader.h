@@ -52,6 +52,7 @@ class DataReader {
   std::shared_ptr<DataBundle> last_fetched_queue_item_;
 
   bool is_removing_channel_;
+  bool is_migrating_;
   int64_t timer_interval_;
   int64_t last_bundle_ts_;
   int64_t last_message_ts_;
@@ -62,7 +63,8 @@ class DataReader {
 
   static const uint32_t kReadItemTimeout;
 
-  std::shared_ptr<std::thread> statistic_thread_;
+  ConsumerChannelInfo migrate_channel_info_;
+  std::shared_ptr<ConsumerChannel> migrate_channel_;
 
  protected:
   std::unordered_map<ObjectID, ConsumerChannelInfo> channel_info_map_;
@@ -109,10 +111,14 @@ class DataReader {
   void NotifyConsumed(std::shared_ptr<DataBundle> &message);
 
   void RemoveChannel(ObjectID q_id);
+  void SetStateful();
+  void StartMigration();
+  void EndMigration();
 
  private:
   /// Create channels and connect to all upstream.
   StreamingStatus InitChannel();
+  StreamingStatus InitMigrateChannel();
 
   /// One item from every channel will be popped out, then collecting
   /// them to a merged queue. High prioprity items will be fetched one by one.
@@ -125,11 +131,11 @@ class DataReader {
   StreamingStatus GetMessageFromChannel(ConsumerChannelInfo &channel_info,
                                         std::shared_ptr<DataBundle> &message);
 
+  StreamingStatus GetMessageFromMigration(std::shared_ptr<DataBundle> &message);
+
   /// Get top item from prioprity queue.
   StreamingStatus GetMergedMessageBundle(std::shared_ptr<DataBundle> &message,
                                          bool &is_valid_break);
-
-  void StatisticTimer();
 };
 }  // namespace streaming
 }  // namespace ray

@@ -58,8 +58,6 @@ void DataWriter::Run() {
       std::make_shared<std::thread>(&DataWriter::EmptyMessageTimerCallback, this);
   flow_control_thread_ =
       std::make_shared<std::thread>(&DataWriter::FlowControlTimer, this);
-  statistic_thread_ =
-      std::make_shared<std::thread>(&DataWriter::StatisticTimer, this);
 }
 
 /// Since every memory ring buffer's size is limited, when the writing buffer is
@@ -130,6 +128,22 @@ StreamingStatus DataWriter::InitChannel(const ObjectID &q_id, const ActorID &act
   return StreamingStatus::OK;
 }
 
+void DataWriter::SetMigrating(const ActorID &actor_id) {
+    STREAMING_LOG(INFO) << "[LPQINFO] Initialize migrating actor " << actor_id;
+    ObjectID queue_id = ObjectID::FromBinary("migrate_channel12345");
+    migrate_channel_ = std::make_shared<StreamingMigrateChannel>(queue_id, actor_id);
+}
+
+StreamingStatus DataWriter::WriteMigrationMessage(const ActorID &actor_id, uint8_t *data,
+                                                  uint32_t data_size) {
+    STREAMING_LOG(INFO) << "[LPQINFO] Start send migration message";
+    auto status = migrate_channel_->ProduceItemToChannel(actor_id, data, data_size);
+    if (status == StreamingStatus::OK) {
+        STREAMING_LOG(INFO) << "[LPQINFO] send migration data to " << actor_id;
+    }
+    return StreamingStatus::OK;
+}
+
 StreamingStatus DataWriter::Init(const std::vector<ObjectID> &queue_id_vec,
                                  const std::vector<ActorID> &actor_ids,
                                  const std::vector<uint64_t> &channel_message_id_vec,
@@ -194,10 +208,6 @@ DataWriter::~DataWriter() {
     if (flow_control_thread_->joinable()) {
       STREAMING_LOG(INFO) << "FlowControl timer thread waiting for join";
       flow_control_thread_->join();
-    }
-    if (statistic_thread_->joinable()) {
-      STREAMING_LOG(INFO) << "Statistic timer thread waiting for join";
-      statistic_thread_->join();
     }
     int user_event_count = 0;
     int empty_event_count = 0;
@@ -451,42 +461,6 @@ void DataWriter::NotifyConsumedItem(ProducerChannelInfo &channel_info, uint32_t 
                            << channel_info.current_seq_id;
   } else {
     channel_map_[channel_info.channel_id]->NotifyChannelConsumed(offset);
-  }
-}
-
-void DataWriter::StatisticTimer() {
-  std::chrono::milliseconds MockTimer(1000);
-  while(true) {
-    std::this_thread::sleep_for(MockTimer);
-
-    if (runtime_context_->GetRuntimeStatus() != RuntimeStatus::Running) {
-      return;
-    }
-
-    for (const auto &output_queue : output_queue_ids_) {
-      if (runtime_context_->GetRuntimeStatus() != RuntimeStatus::Running) {
-        return;
-      }
-      ProducerChannelInfo &channel_info = channel_info_map_[output_queue];
-      channel_map_[channel_info.channel_id]->RefreshChannelInfo();
-
-      //record some statistics
-      //current_seq_id - last_current_seq_id : how many records have been send
-      //consumed_seq_id - last_consumed_seq_id : how many records have been processed
-      //by the downstream operator
-      channel_info.sent_message_cnt = channel_info.current_message_id - 
-                                        channel_info.last_current_message_id;
-      channel_info.processed_msg_cnt = channel_info.queue_info.consumed_seq_id - 
-                                        channel_info.last_consumed_seq_id;
-      channel_info.last_current_message_id = channel_info.current_message_id;
-      channel_info.last_consumed_seq_id = channel_info.queue_info.consumed_seq_id;
-      STREAMING_LOG(DEBUG) << "[LPQInfo] [Writer] qid " << channel_info.channel_id
-                           << " num records sent: " << channel_info.sent_message_cnt
-                           << " num records processed: " << channel_info.processed_msg_cnt
-                           << " consumed_seq_id " << channel_info.queue_info.consumed_seq_id
-                           << " last_consumed_seq_id " << channel_info.last_consumed_seq_id;
-    
-    }
   }
 }
 

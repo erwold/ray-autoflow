@@ -195,7 +195,7 @@ void ReaderQueue::Notify(uint64_t seq_id) {
 void ReaderQueue::CreateNotifyTask(uint64_t seq_id, std::vector<TaskArg> &task_args) {}
 
 void ReaderQueue::OnData(QueueItem &item) {
-  if (item.SeqId() != expect_seq_id_) {
+  if ((item.SeqId() != expect_seq_id_) && !is_omit_expected_ ) {
     STREAMING_LOG(WARNING) << "OnData ignore seq_id: " << item.SeqId()
                            << " expect_seq_id_: " << expect_seq_id_;
     return;

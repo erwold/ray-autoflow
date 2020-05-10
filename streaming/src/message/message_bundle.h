@@ -14,6 +14,7 @@ enum class StreamingMessageBundleType : uint32_t {
   Empty = 1,
   Barrier = 2,
   Bundle = 3,
+  Migration = 4,
   MIN = Empty,
   MAX = Bundle
 };

@@ -142,6 +142,11 @@ std::shared_ptr<WriterQueue> UpstreamQueueMessageHandler::CreateUpstreamQueue(
   return queue;
 }
 
+std::shared_ptr<ray::streaming::Transport> UpstreamQueueMessageHandler::CreateMigrateTransport(
+                                                    const ActorID &peer_actor_id) {
+    return std::make_shared<ray::streaming::Transport>(core_worker_, peer_actor_id);
+}
+
 bool UpstreamQueueMessageHandler::UpstreamQueueExists(const ObjectID &queue_id) {
   return nullptr != GetUpQueue(queue_id);
 }

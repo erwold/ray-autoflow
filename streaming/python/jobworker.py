@@ -7,6 +7,7 @@ import ray.streaming._streaming as _streaming
 from ray.streaming.config import Config
 from ray.function_manager import FunctionDescriptor
 from ray.streaming.communication import DataInput, DataOutput
+import ray.streaming.runtime.transfer as transfer
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,13 @@ class JobWorker:
         self.output_gate = None
         self.reader_client = None
         self.writer_client = None
+        self.actor_id = None
 
     def init(self, env):
         """init streaming actor"""
         env = pickle.loads(env)
         self.env = env
+        self.actor_id = ray.worker.global_worker.actor_id
         logger.info("init operator instance %s", self.processor_name)
 
         if env.config.channel_type == Config.NATIVE_CHANNEL:
@@ -73,8 +76,21 @@ class JobWorker:
                 env, self.output_channels,
                 self.operator_chain.partitioning_strategies)
             self.output_gate.init()
-        if self.operator_chain.is_source:
+        if self.operator_chain.is_source or self.operator_chain.is_event_source:
             self.operator_chain.set_instance_id(self.worker_id[1])
+        if self.operator_chain.is_eventkeyby:
+            self.operator_chain.set_num_input(len(self.input_channels))
+        if self.operator_chain.is_stateful:
+            self.input_gate.set_stateful()
+            self.migrater = transfer.StateMigrater(self.actor_id)
+            self.operator_chain.set_migrater(self.migrater) 
+            self.operator_chain.set_actor_id(self.actor_id)
+            self.probe_writer = transfer.ProbeWriter(self.get_scheduler_id())
+            self.operator_chain.set_probe_writer(self.probe_writer)
+        if self.operator_chain.is_scheduler:
+            self.operator_chain.set_stateful_op(self.env.execution_graph.stateful_op)
+            self.prober = transfer.FlowProber()
+            self.operator_chain.set_prober(self.prober)
         logger.info("init operator instance %s succeed", self.processor_name)
         return True
 
@@ -82,9 +98,9 @@ class JobWorker:
     def start(self):
         self.t = threading.Thread(target=self.run, daemon=True)
         self.t.start()
-        actor_id = ray.worker.global_worker.actor_id
+        # actor_id = ray.worker.global_worker.actor_id
         logger.info("%s %s started, actor id %s", self.__class__.__name__,
-                    self.processor_name, actor_id)
+                    self.processor_name, self.actor_id)
 
     def run(self):
         self.operator_chain.init(self.input_gate, self.output_gate)
@@ -123,3 +139,6 @@ class JobWorker:
             return b" " * 4  # special flag to indicate this actor not ready
         result = self.writer_client.on_writer_message_sync(buffer)
         return result.to_pybytes()
+
+    def get_scheduler_id(self):
+        return self.env.execution_graph.get_actor(0, 0)._ray_actor_id

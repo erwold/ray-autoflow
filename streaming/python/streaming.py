@@ -59,6 +59,7 @@ class ExecutionGraph:
         self.input_channels = {}  # operator id -> input channels
         self.output_channels = {}  # operator id -> output channels
         self.chained_operators = []
+        self.stateful_op = []
 
     # Constructs and deploys a Ray actor of a specific type
     # TODO (john): Actor placement information should be specified in
@@ -111,6 +112,8 @@ class ExecutionGraph:
             if handle:
                 handles.append(handle)
                 self.actors_map[(operator_chain.id, i)] = handle
+            if operator_chain.is_stateful:
+                self.stateful_op.append(handle._ray_actor_id)
         return handles
 
     # Adds a channel/edge to the physical dataflow graph
@@ -134,6 +137,7 @@ class ExecutionGraph:
         The number of total channels generated depends on the partitioning
         strategy specified by the user.
         """
+        # logger.info("operator {} generate channels".format(operator_chain.id))
         channels = {}  # destination operator id -> channels
         strategies = operator_chain.partitioning_strategies
         for dst_operator, p_scheme in strategies.items():
@@ -145,6 +149,7 @@ class ExecutionGraph:
                     id = i % num_dest_instances
                     qid = self._gen_str_qid(operator_chain.id, i, dst_operator, id)
                     c = DataChannel(operator_chain.id, i, dst_operator, id, qid, operator_chain.last_id)
+                    # logger.info("channel {} to {}".format(operator_chain.id, dst_operator))
                     entry.append(c)
             elif p_scheme.strategy in all_to_all_strategies:
                 for i in range(operator_chain.num_instances):
@@ -152,6 +157,7 @@ class ExecutionGraph:
                         qid = self._gen_str_qid(operator_chain.id, i, dst_operator,
                                                 j)
                         c = DataChannel(operator_chain.id, i, dst_operator, j, qid, operator_chain.last_id)
+                        # logger.info("channel {} to {}".format(operator_chain.id, dst_operator))
                         entry.append(c)
             else:
                 # TODO (john): Add support for other partitioning strategies
@@ -173,7 +179,6 @@ class ExecutionGraph:
         return task_id
 
     def get_task_id(self, op_id, op_instance_id):
-        #logger.info("task_ids {}".format(self.task_ids))
         return self.task_ids[(op_id, op_instance_id)]
 
     def get_actor(self, op_id, op_instance_id):
@@ -240,11 +245,12 @@ class ExecutionGraph:
                 operator_list.append(self.env.operators[node])
                 successors = list(self.env.logical_topo.successors(node))
                 assert len(successors) == 1
+                # todo: source->eventkeyby->...
                 if self.env.operators[successors[0]].type != OpType.KeyBy:
                     operator_chain = OperatorChain(operator_list)
                     self.chained_operators.append(operator_chain)
                     operator_list = []
-            elif op_type == OpType.KeyBy:
+            elif (op_type == OpType.KeyBy) or (op_type == OpType.EventKeyBy) or (op_type == OpType.EventSource):
                 operator_list.append(self.env.operators[node])
                 operator_chain = OperatorChain(operator_list)
                 self.chained_operators.append(operator_chain)
@@ -365,6 +371,14 @@ class Environment:
             source_id, OpType.Source, processor.Source, "Source", logic=source)
         return source_stream
 
+    def scheduler(self, start_time, end_time, time_step):
+        others = [start_time, end_time, time_step]
+        scheduler_id = self.gen_operator_id()
+        scheduler_stream = DataStream(self, scheduler_id)
+        self.operators[scheduler_id] = Operator(
+            scheduler_id, OpType.Scheduler, processor.Scheduler, "Scheduler", other=others)
+        return scheduler_stream
+
     # Creates and registers a new data source that reads a
     # text file line by line
     # TODO (john): There should be different types of sources,
@@ -393,6 +407,7 @@ class Environment:
 
         self.execution_graph = ExecutionGraph(self)
         self.execution_graph.build_graph()
+        self.execution_graph.print_physical_graph()
         logger.info("init...")
         # init
         init_waits = []
@@ -523,7 +538,7 @@ class DataStream:
                                                         input_stream.id)
                 src_operator._set_partition_strategy(self.id, partitioning,
                                                     operator.id)
-            elif src_operator.type == OpType.KeyBy:
+            elif (src_operator.type == OpType.KeyBy) or (src_operator.type == OpType.EventKeyBy):
                 # Set the output partitioning strategy to shuffle by key
                 partitioning = PScheme(PStrategy.ShuffleByKey)
                 src_operator._set_partition_strategy(self.id, partitioning,
@@ -816,5 +831,35 @@ class DataStream:
             processor.Sink,
             "Sink",
             logic,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
+    def event_source(self, source):
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.EventSource,
+            processor.EventSource,
+            "EventSource",
+            logic=source,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
+    def event_key_by(self, key_selector):
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.EventKeyBy,
+            processor.EventKeyBy,
+            "EventKeyBy",
+            other=key_selector,
+            num_instances=self.env.config.parallelism)
+        return self.__register(op)
+
+    def event_reduce(self, reduce_fn):
+        op = Operator(
+            self.env.gen_operator_id(),
+            OpType.EventReduce,
+            processor.EventReduce,
+            "EventReduce",
+            reduce_fn,
             num_instances=self.env.config.parallelism)
         return self.__register(op)

@@ -144,6 +144,18 @@ class StreamingQueueProducer : public ProducerChannel {
   std::shared_ptr<WriterQueue> queue_;
 };
 
+class StreamingMigrateChannel {
+ public:   
+  StreamingMigrateChannel(const ObjectID queue_id, const ActorID &actor_id) 
+      : queue_id_(queue_id), actor_id_(actor_id) {}
+  StreamingStatus ProduceItemToChannel(const ActorID &peer_actor_id, uint8_t *data, uint32_t data_size);
+ private:
+  ray::ObjectID queue_id_;
+  ray::ActorID actor_id_;
+  std::unordered_map<ActorID, std::shared_ptr<ray::streaming::Transport>> transports_;
+  std::unordered_map<ActorID, int> actor_seq_id_;
+};
+
 class StreamingQueueConsumer : public ConsumerChannel {
  public:
   explicit StreamingQueueConsumer(std::shared_ptr<Config> &transfer_config,
@@ -162,6 +174,26 @@ class StreamingQueueConsumer : public ConsumerChannel {
  private:
   std::shared_ptr<ReaderQueue> queue_;
 };
+
+class StreamingQueueProber : public ConsumerChannel {
+ public:
+  explicit StreamingQueueProber(std::shared_ptr<Config> &transfer_config,
+                                  ConsumerChannelInfo &c_channel_info);
+  ~StreamingQueueProber() override;
+  StreamingStatus CreateTransferChannel() override;
+  StreamingStatus DestroyTransferChannel() override;
+  StreamingStatus ClearTransferCheckpoint(uint64_t checkpoint_id,
+                                          uint64_t checkpoint_offset) override;
+  StreamingStatus RefreshChannelInfo() override;
+  StreamingStatus ConsumeItemFromChannel(uint64_t &offset_id, uint8_t *&data,
+                                         uint32_t &data_size, uint32_t timeout) override;
+  StreamingStatus NotifyChannelConsumed(uint64_t offset_id) override;
+  bool hasChannelData() override;
+
+ private:
+  std::shared_ptr<ReaderQueue> queue_;
+};
+
 
 /// MockProducer and Mockconsumer are independent implementation of channels that
 /// conduct a very simple memory channel for unit tests or intergation test.
