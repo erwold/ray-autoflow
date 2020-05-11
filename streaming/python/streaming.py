@@ -81,7 +81,7 @@ class ExecutionGraph:
         # Note direct_call only support pass by value
         return JobWorker._remote(
             args=[worker_id, operator_chain, input_channels, output_channels],
-            is_direct_call=True)
+            is_direct_call=True, num_cpus=1.0)
 
     # Constructs and deploys a Ray actor for each instance of
     # the given operator

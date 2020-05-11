@@ -39,6 +39,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     bids_file = str(args.bids_file)
 
+    #ray.init(address="auto", redis_password="5241590000000000")
     ray.init(local_mode=False)
 
     # A Ray streaming environment with the default configuration
@@ -49,15 +50,15 @@ if __name__ == "__main__":
     #  with a rolling sum operator.
     # It reads articles from wikipedia, splits them in words,
     # shuffles words, and counts the occurences of each word.
-    stream = env.scheduler(2800, 189110, 1000) \
+    stream = env.scheduler(2800, 600000, 1000) \
                 .shuffle() \
                 .set_parallelism(1) \
                 .event_source(dg.NexmarkEventGenerator(bids_file, "Bid")) \
                 .set_parallelism(2) \
                 .map(map_function) \
-                .set_parallelism(1) \
+                .set_parallelism(2) \
                 .event_key_by("auction") \
-                .set_parallelism(1) \
+                .set_parallelism(2) \
                 .event_reduce(reduce_function) \
                 .set_parallelism(2) \
                 .sink(dg.LatencySink()) \

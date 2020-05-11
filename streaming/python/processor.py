@@ -752,16 +752,31 @@ class Scheduler:
         self.buffer_record = {}
         self.is_probe = False
         self.prober = operator.prober
+        # rate limit
+        self.start = 0
+        self.event_rate = 1000
+        self.total_count = 0
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
         self.output_gate = output_gate
 
+    def __wait(self, marker):
+        while (self.total_count / (time.time() - self.start) >
+                self.event_rate):
+            # time.sleep(0.00005)
+            probe_msg = self.prober.probe()
+            if probe_msg is not None:
+                self.receive_probe(probe_msg, marker)
+                self.is_probe = True
+
     def process(self, record):
-        if self.closed and self.is_probe:
+        #if self.closed and self.is_probe:
+        #    return False
+        if self.closed:
             return False
-        #if self.closed:
-            #return False
+        if not self.start:
+            self.start = time.time()
 
         self.event_time = self.event_time + self.time_step
         if self.event_time > self.end_time:
@@ -773,11 +788,13 @@ class Scheduler:
             "migration": None,
         }
 
-        probe_msg = self.prober.probe()
-        if probe_msg is not None:
-            self.receive_probe(probe_msg, marker)
-            self.is_probe = True
+        #probe_msg = self.prober.probe()
+        #if probe_msg is not None:
+        #    self.receive_probe(probe_msg, marker)
+        #    self.is_probe = True
 
+        self.total_count += 50
+        self.__wait(marker)
         #logger.info("marker send {}".format(marker))
         if self.closed is False:
             self.output_gate.broadcast_marker(marker)
