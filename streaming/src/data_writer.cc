@@ -320,9 +320,11 @@ bool DataWriter::CollectFromRingBuffer(ProducerChannelInfo &channel_info,
   }
 
   StreamingMessageBundlePtr bundle_ptr;
+  uint64_t bundle_ts = current_time_ms();
   bundle_ptr = std::make_shared<StreamingMessageBundle>(
-      std::move(message_list), current_time_ms(), message_list.back()->GetMessageSeqId(),
+      std::move(message_list), bundle_ts, message_list.back()->GetMessageSeqId(),
       StreamingMessageBundleType::Bundle, bundle_buffer_size);
+  STREAMING_LOG(INFO) << "[LPQTIMEINFO] current_time_ms " << bundle_ts;
   buffer_ptr->ReallocTransientBuffer(bundle_ptr->ClassBytesSize());
   bundle_ptr->ToBytes(buffer_ptr->GetTransientBufferMutable());
 

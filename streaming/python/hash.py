@@ -25,7 +25,7 @@ class Hash(object):
 
     def get(self, key):
         key = _hash(key)
-        logger.info("get key {}".format(key))
+        #logger.info("get key {}".format(key))
         position = self.sorted_keys[0]
         for k in self.sorted_keys:
             if key < k:

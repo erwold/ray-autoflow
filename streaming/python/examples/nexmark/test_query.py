@@ -19,6 +19,7 @@ def map_function(bid):
         "auction": bid["auction"],
         "price": bid["price"],
         "system_time": bid["system_time"],
+        "event_time": bid["event_time"],
     }
     return record
 
@@ -50,19 +51,19 @@ if __name__ == "__main__":
     #  with a rolling sum operator.
     # It reads articles from wikipedia, splits them in words,
     # shuffles words, and counts the occurences of each word.
-    stream = env.scheduler(2800, 600000, 1000) \
+    stream = env.scheduler(2800, 1800000, 1000) \
                 .shuffle() \
                 .set_parallelism(1) \
                 .event_source(dg.NexmarkEventGenerator(bids_file, "Bid")) \
-                .set_parallelism(2) \
+                .set_parallelism(3) \
                 .map(map_function) \
-                .set_parallelism(2) \
+                .set_parallelism(3) \
                 .event_key_by("auction") \
-                .set_parallelism(2) \
+                .set_parallelism(3) \
                 .event_reduce(reduce_function) \
-                .set_parallelism(2) \
+                .set_parallelism(3) \
                 .sink(dg.LatencySink()) \
-                .set_parallelism(2)
+                .set_parallelism(3)
 
     # stream to stdout
     start = time.time()

@@ -813,7 +813,8 @@ class Scheduler:
             self.marker[event_time] += 1
         self.buffer_record[event_time].append(record)
         if self.marker[event_time] == self.num_input:
-            self.process_probe(event_time, marker)
+            pass
+            #self.process_probe(event_time, marker)
 
     def process_probe(self, event_time, marker):
         # find max and min
@@ -863,6 +864,7 @@ class EventKeyBy:
         self.num_input = operator.num_input
         self.partial_state = []
         self.buffer_record = {}
+        self.migrate_time = None
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
@@ -888,6 +890,7 @@ class EventKeyBy:
                     for v_id in v_ids:
                         self.partial_state.append(v_id)
                         self.buffer_record[v_id] = []
+                    self.migrate_time = event_time
             else:
                 self.marker[event_time] += 1
             if self.marker[event_time] == self.num_input:
@@ -905,7 +908,7 @@ class EventKeyBy:
         else:
             key = self._key_selector(record)
             v_id, actor_id = self.output_gate.hash.get(key)
-            if v_id in self.partial_state:
+            if (v_id in self.partial_state) and (record["event_time"] >= self.migrate_time):
                 self.buffer_record[v_id].append(record)
                 return True
 
@@ -923,6 +926,7 @@ class EventKeyBy:
             self.output_gate.push((actor_id, record))
         self.buffer_record.pop(v_id)
         self.partial_state.remove(v_id)
+        self.migrate_time = None
 
 
 class EventReduce:
@@ -945,7 +949,7 @@ class EventReduce:
         # for probe
         self.probe_writer = operator.probe_writer
         self.process_num = defaultdict(int)
-        self.throughput = 0
+        self.throughput = defaultdict(int)
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
@@ -1013,7 +1017,8 @@ class EventReduce:
 
             result = self.reduce_fn(self.state[v_id], record)
             self.process_num[v_id] = self.process_num[v_id] + 1
-            self.throughput = self.throughput + 1
+            # self.throughput = self.throughput + 1
+            self.increase_throughput(record["event_time"])
             if self.downstream_operator:
                 self.downstream_operator.process(result)
             else:
@@ -1025,7 +1030,7 @@ class EventReduce:
         for record in self.buffer_record[v_id]:
             result = self.reduce_fn(self.state[v_id], record)
             self.process_num[v_id] = self.process_num[v_id] + 1
-            self.throughput = self.throughput + 1
+            self.increase_throughput(record["event_time"])
 
             if self.downstream_operator:
                 self.downstream_operator.process(result)
@@ -1036,15 +1041,26 @@ class EventReduce:
         self.partial_state.remove(v_id)
 
     def write_probe(self, event_time):
+        throughput = self.throughput.pop(event_time)
         record = {
             "sender": self.actor_id,
             "event_time": event_time,
-            "throughput": self.throughput,
+            "throughput": throughput,
             "process": self.process_num,
         }
+        logger.info("write probe {}".format(record))
         self.probe_writer.write_probe(record)
         self.process_num.clear()
-        self.throughput = 0
+
+    def increase_throughput(self, event_time):
+        max_time = None
+        for time in self.marker.keys():
+            max_time = time
+            if event_time <= time:
+                self.throughput[time] += 1
+                return
+        logger.info("exceed max marker time {}".format(event_time))
+        self.throughput[max_time + 1000] += 1
 
     # Returns the state of the actor
     def get_state(self):
