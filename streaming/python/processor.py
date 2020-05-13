@@ -950,6 +950,7 @@ class EventReduce:
         self.probe_writer = operator.probe_writer
         self.process_num = defaultdict(int)
         self.throughput = defaultdict(int)
+        self.throughput[3800] = 0
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
@@ -1018,7 +1019,7 @@ class EventReduce:
             result = self.reduce_fn(self.state[v_id], record)
             self.process_num[v_id] = self.process_num[v_id] + 1
             # self.throughput = self.throughput + 1
-            self.increase_throughput(record["event_time"])
+            #self.increase_throughput(record["event_time"])
             if self.downstream_operator:
                 self.downstream_operator.process(result)
             else:
@@ -1041,11 +1042,11 @@ class EventReduce:
         self.partial_state.remove(v_id)
 
     def write_probe(self, event_time):
-        throughput = self.throughput.pop(event_time)
+        #throughput = self.throughput.pop(event_time)
         record = {
             "sender": self.actor_id,
             "event_time": event_time,
-            "throughput": throughput,
+            "throughput": self.throughput[event_time],
             "process": self.process_num,
         }
         logger.info("write probe {}".format(record))
@@ -1054,7 +1055,7 @@ class EventReduce:
 
     def increase_throughput(self, event_time):
         max_time = None
-        for time in self.marker.keys():
+        for time in self.throughput.keys():
             max_time = time
             if event_time <= time:
                 self.throughput[time] += 1

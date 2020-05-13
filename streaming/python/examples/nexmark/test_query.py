@@ -19,7 +19,7 @@ def map_function(bid):
         "auction": bid["auction"],
         "price": bid["price"],
         "system_time": bid["system_time"],
-        "event_time": bid["event_time"],
+        "event_time": bid["dateTime"],
     }
     return record
 
@@ -55,15 +55,15 @@ if __name__ == "__main__":
                 .shuffle() \
                 .set_parallelism(1) \
                 .event_source(dg.NexmarkEventGenerator(bids_file, "Bid")) \
-                .set_parallelism(3) \
+                .set_parallelism(2) \
                 .map(map_function) \
-                .set_parallelism(3) \
+                .set_parallelism(2) \
                 .event_key_by("auction") \
-                .set_parallelism(3) \
+                .set_parallelism(2) \
                 .event_reduce(reduce_function) \
-                .set_parallelism(3) \
+                .set_parallelism(2) \
                 .sink(dg.LatencySink()) \
-                .set_parallelism(3)
+                .set_parallelism(2)
 
     # stream to stdout
     start = time.time()
