@@ -5,6 +5,7 @@ import types
 import math
 from collections import defaultdict
 from ray.streaming.communication import _hash
+from ray.streaming.analyzer import Analyzer
 
 logger = logging.getLogger(__name__)
 logger.setLevel("INFO")
@@ -217,6 +218,8 @@ class Sink:
         self.downstream_operator = None
         self.input_gate = None
         self.output_gate = None
+        self.instance_id = operator.instance_id
+        self.output_file = "result_{}.txt".format(self.instance_id)
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
@@ -229,6 +232,16 @@ class Sink:
         if record is None:
             logger.info("Throughput: {}".format(self.sink.throughputs))
             logger.info("Latency: {}".format(self.sink.latencies))
+            with open(self.output_file, "w") as f:
+                f.write("throughput\n")
+                for throughput in self.sink.throughputs:
+                    f.write(str(throughput))
+                    f.write("\n")
+                f.write("latency\n")
+                for latency in self.sink.latencies:
+                    f.write(str(latency))
+                    f.write("\n")
+
             return False
 
         result = self.sink.evict(record)
@@ -746,16 +759,18 @@ class Scheduler:
         self.time_step = operator.other_args[2]
         self.closed = False
         self.stateful_op = operator.stateful_op
+        logger.info("stateful_op {}".format(self.stateful_op))
         # todo: currently support one-stage stateful op
         self.num_input = len(self.stateful_op)
         self.marker = {}
-        self.buffer_record = {}
+        # self.buffer_record = {}
         self.is_probe = False
         self.prober = operator.prober
         # rate limit
         self.start = 0
         self.event_rate = 1000
         self.total_count = 0
+        self.analyzer = Analyzer(self.stateful_op)
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
@@ -808,13 +823,16 @@ class Scheduler:
         event_time = record["event_time"]
         if self.marker.get(event_time) is None:
             self.marker[event_time] = 1
-            self.buffer_record[event_time] = []
+            # self.buffer_record[event_time] = []
         else:
             self.marker[event_time] += 1
-        self.buffer_record[event_time].append(record)
+        # self.buffer_record[event_time].append(record)
+        self.analyzer.process_probe(record)
         if self.marker[event_time] == self.num_input:
-            pass
-            #self.process_probe(event_time, marker)
+            self.analyzer.analyze(event_time, marker)
+            self.marker.pop(event_time)
+            # pass
+            # self.process_probe(event_time, marker)
 
     def process_probe(self, event_time, marker):
         # find max and min
@@ -948,9 +966,10 @@ class EventReduce:
         self.buffer_record = {}
         # for probe
         self.probe_writer = operator.probe_writer
-        self.process_num = defaultdict(int)
+        self.process_num = {}
         self.throughput = defaultdict(int)
         self.throughput[3800] = 0
+        self.process_num[3800] = defaultdict(int)
 
     def set_chaining(self, downstream_operator, input_gate, output_gate):
         self.downstream_operator = downstream_operator
@@ -1005,7 +1024,8 @@ class EventReduce:
                         format(self.actor_id, record))
             self.state[record["v_id"]] = record["data"]
             self.merge(record["v_id"])
-            self.input_gate.end_migration()
+            if len(self.partial_state) == 0:
+                self.input_gate.end_migration()
             return True
         else:
             v_id = record["v_id"]
@@ -1017,9 +1037,9 @@ class EventReduce:
                     self.state[v_id] = {}
 
             result = self.reduce_fn(self.state[v_id], record)
-            self.process_num[v_id] = self.process_num[v_id] + 1
+            # self.process_num[v_id] = self.process_num[v_id] + 1
             # self.throughput = self.throughput + 1
-            #self.increase_throughput(record["event_time"])
+            self.increase_throughput(record["event_time"], v_id)
             if self.downstream_operator:
                 self.downstream_operator.process(result)
             else:
@@ -1030,8 +1050,8 @@ class EventReduce:
     def merge(self, v_id):
         for record in self.buffer_record[v_id]:
             result = self.reduce_fn(self.state[v_id], record)
-            self.process_num[v_id] = self.process_num[v_id] + 1
-            self.increase_throughput(record["event_time"])
+            # self.process_num[v_id] = self.process_num[v_id] + 1
+            self.increase_throughput(record["event_time"], v_id)
 
             if self.downstream_operator:
                 self.downstream_operator.process(result)
@@ -1047,21 +1067,24 @@ class EventReduce:
             "sender": self.actor_id,
             "event_time": event_time,
             "throughput": self.throughput[event_time],
-            "process": self.process_num,
+            "process": self.process_num[event_time],
         }
         logger.info("write probe {}".format(record))
         self.probe_writer.write_probe(record)
-        self.process_num.clear()
+        self.process_num[event_time].clear()
 
-    def increase_throughput(self, event_time):
+    def increase_throughput(self, event_time, v_id):
         max_time = None
         for time in self.throughput.keys():
             max_time = time
             if event_time <= time:
                 self.throughput[time] += 1
+                self.process_num[time][v_id] += 1
                 return
         logger.info("exceed max marker time {}".format(event_time))
         self.throughput[max_time + 1000] += 1
+        self.process_num[max_time + 1000] = defaultdict(int)
+        self.process_num[max_time + 1000][v_id] += 1
 
     # Returns the state of the actor
     def get_state(self):

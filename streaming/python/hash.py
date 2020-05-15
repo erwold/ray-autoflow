@@ -16,10 +16,10 @@ class Hash(object):
         self.nodes = nodes
         self.vnum = virtual_num
         self.vnodes = {}
-        for node in self.nodes:
+        for node in self.nodes.keys():
             for i in range(self.vnum):
-                v_id = "{}-{}".format(node, i)
-                self.vnodes[_hash(v_id)] = (v_id, node)
+                v_id = "{}-{}".format(self.nodes[node], i)
+                self.vnodes[_hash(v_id)] = (v_id, self.nodes[node])
         self.sorted_keys = sorted(self.vnodes.keys())
         logger.info("[LPQINFO] keys {}".format(self.sorted_keys))
 
@@ -34,4 +34,5 @@ class Hash(object):
 
     # change routing table
     def set(self, v_id, dst_node):
-        self.vnodes[_hash(v_id)] = (v_id, dst_node)
+        node_id = self.nodes[dst_node]
+        self.vnodes[_hash(v_id)] = (v_id, node_id)

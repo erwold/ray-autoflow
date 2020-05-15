@@ -168,6 +168,7 @@ class OperatorChain:
         self.is_eventkeyby = True if operator_list[-1].name == "EventKeyBy" else False
         self.is_stateful = True if operator_list[0].name == "EventReduce" else False
         self.is_scheduler = True if operator_list[0].name == "Scheduler" else False
+        self.is_sink = True if operator_list[-1].name == "Sink" else False
         self.type = "{"
         for operator in operator_list:
             self.type += " " + operator.name
@@ -177,6 +178,7 @@ class OperatorChain:
     def set_instance_id(self, id):
         #assert self.is_source is True
         self.operator_list[0].set_instance_id(id)
+        self.operator_list[-1].set_instance_id(id)
 
     # only for event key by
     def set_num_input(self, num_input):

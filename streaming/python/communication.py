@@ -58,7 +58,7 @@ class DataChannel:
 
 
 _CLOSE_FLAG = b" "
-_VIRTUAL_NUM = 10
+_VIRTUAL_NUM = 20
 
 
 # Pulls and merges data from multiple input channels
@@ -245,19 +245,21 @@ class DataOutput:
         assert not (self.shuffle_exists and self.shuffle_key_exists)
         self.actor_id = None
         self.hash = None
-        self.output_actors = []
+        self.output_actors = {}
         self.actor_to_queue = {}
 
     def init(self):
         """init DataOutput which creates DataWriter"""
         channel_ids = [c.str_qid for c in self.channels]
         to_actors = []
+        num_output = 0
         for c in self.channels:
             actor = self.env.execution_graph.get_actor(c.dst_operator_id,
                                                        c.dst_instance_index)
             to_actors.append(actor)
-            self.actor_to_queue[actor._ray_actor_id] = c.qid
-            self.output_actors.append(actor._ray_actor_id)
+            self.actor_to_queue[num_output] = c.qid
+            self.output_actors[actor._ray_actor_id] = num_output
+            num_output += 1
         logger.info("DataOutput output_actors %s", to_actors)
 
         # get self actor id

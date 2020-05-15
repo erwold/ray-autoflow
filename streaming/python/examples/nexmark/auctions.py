@@ -3,17 +3,49 @@ import xxhash
 from auction import OpenAuction
 from constant import min_auction_time, max_auction_time
 
-item_dist_size = 100
-slots_meta = [(0, 38005339),
-         (266914649, 392418729),
-         (828625487, 895577465),
-         (895577465, 1030162152),
-         (2052894126, 2145941112),
-         (3397088106, 3410051515),
-         (3704878703, 3979594992),
-         (4014175280, 4034431209),
-         (4034431209, 4091524477),
-         (4227403771, 4284104139)]
+num_node = 2
+num_slot = 20
+skew_node = [0]
+skew_percent = 5
+slots_meta = []
+"""slots_meta = [(0, 242428685),
+         (562254147, 585553396),
+         (1709671711, 1735916491),
+         (1735916491, 2223001858),
+         (2223001858, 2443748874),
+         (2443748874, 2782254823),
+         (2835507185, 2869437224),
+         (3162023598, 3264356174),
+         (3264356174, 3268739810),
+         (3268739810, 4125618242)]"""
+
+def generate_slots():
+    sorted_slots = []  # [.....]
+    slots = []  # [[...], [...], ...]
+    for i in range(num_node):
+        slot = []
+        for j in range(num_slot):
+            slot_hash = xxhash.xxh32_intdigest("{}-{}".format(i, j))
+            slot.append(slot_hash)
+            sorted_slots.append(slot_hash)
+        slots.append(slot)
+
+    sorted_slots = sorted(sorted_slots)
+    skew_slots = []
+    for node in skew_node:
+        for slot in slots[node]:
+            skew_slots.append(slot)
+
+    skew_slots = sorted(skew_slots)
+    for slot in skew_slots:
+        index = sorted_slots.index(slot)
+        if index == 0:
+            slots_meta.append((0, sorted_slots[index]))
+            # slots_meta.append((sorted_slots[-1], ))
+        else:
+            slots_meta.append((sorted_slots[index-1], sorted_slots[index]))
+
+    print(slots_meta)
 
 def is_in_slots(id):
     key = xxhash.xxh32_intdigest(str(id))
@@ -31,11 +63,12 @@ class OpenAuctions(object):
         self.auctions = {}
         self.skew_auctions = {}
         random.seed(18394)
+        generate_slots()
 
     def get_new_id(self, cur_time):
         id = self.cur_id
         end_time = cur_time + random.randrange(max_auction_time) + min_auction_time
-        print("generate id {} end_time {}".format(id, end_time))
+        #print("generate id {} end_time {}".format(id, end_time))
         # self.auctions.append(OpenAuction(random.randrange(200)+1, end_time))
         if is_in_slots(id):
             self.skew_auctions[id] = OpenAuction(random.randrange(200)+1, end_time)
@@ -48,8 +81,8 @@ class OpenAuctions(object):
         # first check if there is closed auction
         self.try_shrink(cur_time)
 
-        is_skew = random.randrange(3)
-        if is_skew == 1:
+        is_skew = random.randrange(10)+1
+        if is_skew <= skew_percent:
             ids = random.sample(self.skew_auctions.keys(), 1)
         else:
             ids = random.sample(self.auctions.keys(), 1)
@@ -60,7 +93,7 @@ class OpenAuctions(object):
         for id in self.auctions.keys():
             if self.auctions[id].is_closed(cur_time) is True:
                 close_ids.append(id)
-                print("cur_time {} closed_id: {}".format(cur_time, id))
+                #print("cur_time {} closed_id: {}".format(cur_time, id))
 
         for id in close_ids:
             self.auctions.pop(id)
@@ -69,7 +102,7 @@ class OpenAuctions(object):
         for id in self.skew_auctions.keys():
             if self.skew_auctions[id].is_closed(cur_time) is True:
                 close_ids.append(id)
-                print("cur_time {} closed_id: {}".format(cur_time, id))
+                #print("cur_time {} closed_id: {}".format(cur_time, id))
 
         for id in close_ids:
             self.skew_auctions.pop(id)

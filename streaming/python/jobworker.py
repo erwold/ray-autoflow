@@ -78,6 +78,8 @@ class JobWorker:
             self.output_gate.init()
         if self.operator_chain.is_source or self.operator_chain.is_event_source:
             self.operator_chain.set_instance_id(self.worker_id[1])
+        if self.operator_chain.is_sink:
+            self.operator_chain.set_instance_id(self.worker_id[1])
         if self.operator_chain.is_eventkeyby:
             self.operator_chain.set_num_input(len(self.input_channels))
         if self.operator_chain.is_stateful:
