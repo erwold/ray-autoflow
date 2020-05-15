@@ -120,7 +120,7 @@ StreamingStatus DataReader::InitMigrateChannel() {
   migrate_channel_info_.last_queue_item_latency = 0;
   migrate_channel_info_.last_queue_target_diff = 0;
   migrate_channel_info_.get_queue_item_times = 0;
-  migrate_channel_ = std::make_shared<StreamingQueueConsumer>(transfer_config_, 
+  migrate_channel_ = std::make_shared<StreamingQueueProber>(transfer_config_, 
                                                     migrate_channel_info_);
   migrate_channel_->CreateTransferChannel();
   STREAMING_LOG(INFO) << "[LPQINFO] Initialize migration channel "
